@@ -1,13 +1,36 @@
 {
-  "name": "Lekh — Documents",
+  "name": "Lekh \u2014 Documents",
   "short_name": "Lekh",
   "description": "A personal word processor that syncs through a private GitHub Gist.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#e9ecf1",
-  "theme_color": "#2457a6",
+  "theme_color": "#4338CA",
   "icons": [
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }
