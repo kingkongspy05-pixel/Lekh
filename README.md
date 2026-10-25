@@ -35,12 +35,26 @@ How it behaves:
 |---|---|
 | Formatting | Fonts (incl. Hindi/Devanagari fonts), sizes, bold, italic, underline, strikethrough, sub/superscript, text colour, highlight, clear formatting |
 | Paragraphs | Styles (Title, Subtitle, Heading 1–4, Quote, Code), bullets, numbering, checklists, nested lists, indent, alignment, line spacing |
-| Insert | Tables (add/delete rows & columns, header row, Tab to move), images (upload, paste, drag-drop; auto-compressed), links, horizontal line, page breaks, symbols (₹ etc.), dates, table of contents, **footnotes** (shown at the bottom of their page) |
-| Layout | **Real pages on screen** (text flows page to page exactly as it prints), A4 / Letter / Legal / A5 / custom size, portrait/landscape, margins, **columns** (1–3), header & footer on every page with `{page}`, `{pages}`, `{title}`, `{date}`. View → Page view switches to a continuous scroll |
+| Tables | Contextual **Table** tab: insert/delete rows & columns, **merge & split cells** (drag across cells to select a block), **vertical alignment** (top/middle/bottom), cell shading, table styles (Grid, Blue header, Banded, Minimal, Plain), borders (all/outside/horizontal/none), header row, banded rows, even columns, fit page/contents, **drag column borders to resize**, **text wrap around the table** — all carried into Word export and back |
+| Images | Resize with presets or the **corner drag handle**; **Wrap**: in line, text around (image left/right), or on its own line (left/centre/right); alt text — wrap settings export to Word as real floating images |
+| Insert | Tables (Tab to move between cells), images (upload, paste, drag-drop; auto-compressed), links, horizontal line, page breaks, symbols (₹ etc.), dates, table of contents, **footnotes** (shown at the bottom of their page) |
+| Layout | **Real pages on screen** (text flows page to page exactly as it prints), A4 / Letter / Legal / A5 / custom size, portrait/landscape, margins, **columns** (1–3), **vertical alignment of text on the page** (top/centre/bottom, e.g. for cover pages), header & footer on every page with `{page}`, `{pages}`, `{title}`, `{date}`. View → Page view switches to a continuous scroll |
 | Review | Track changes with accept/reject (per change or all), comments with replies and resolve, version history (auto every 10 min + named versions), word count |
 | Mailings | **Mail merge**: paste or import a CSV list, insert «fields», preview each record, merge to a new document, one Word file, or a .zip with one Word file per person |
 | Files | Import `.docx` **keeping fonts, sizes, colours, highlights, alignment, lists, tables, images, links, tracked changes, comments, footnotes, headers/footers, page size/margins, columns and merge fields**; also `.md`, `.html`, `.txt`. Export `.docx` (real tracked changes, footnotes, columns, merge fields, headers/footers, page numbers), PDF (Print → Save as PDF, same pages as on screen), `.html`, `.md`, `.txt`. Full JSON backup & restore |
 | Other | Find & replace (case, whole word, regex), templates (resume, cover letter, formal letter, office memorandum, meeting notes, report, essay, manuscript), dark mode, zoom, focus mode, page guides, offline support, keyboard shortcuts |
+
+### Encryption (recommended)
+After connecting sync, open **Sync → Turn on encryption** and choose a passphrase. Lekh moves everything into a fresh gist where every document is encrypted (AES-256) in your browser before upload, and deletes the old readable gist so no plain-text history remains. Other devices ask for the passphrase once. **If you forget the passphrase, the synced copies cannot be opened** — documents already on your devices stay readable.
+
+### Writing tools
+- **Navigation pane** (View → Navigation, or the sidebar tab): your headings as an outline; click to jump; drag or use the arrows to move a whole section with its sub-headings.
+- **Rulers**: drag the grey edges to change margins (top/bottom on the left ruler), and the blue triangles to set first-line, left and right indents. Units in File → Settings.
+- **Styles** (palette button next to the style list): change the font, size, colour and spacing of Normal, Title, Subtitle, Headings and Quote for this document — or for every new document.
+- **Paragraph** (¶ button): spacing before/after, indents, first-line/hanging indent, line spacing.
+- **Format painter** (brush button): click once to copy formatting to one selection; double-click to keep it on, Esc to stop.
+- **Right-click menu** with cut/copy/paste and table, image and link actions. **Shift + right-click** shows the browser menu with spelling suggestions.
+- **AutoCorrect** (File → AutoCorrect options): “1. ” / “- ” / “[] ” / “# ” / “> ” start lists, checklists, headings and quotes; -- → —, ... → …, (c) → ©; capital letters at the start of sentences; curly quotes; your own shortcuts. Ctrl+Z right after a correction undoes it.
 
 ## Known limits (honest list)
 

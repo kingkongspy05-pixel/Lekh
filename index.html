@@ -5,9 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Lekh — Documents</title>
 <meta name="description" content="A personal word processor that runs in your browser and syncs through a private GitHub Gist.">
-<meta name="theme-color" content="#2457a6">
+<meta name="theme-color" content="#4338CA">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Carlito:ital,wght@0,400;0,700;1,400;1,700&family=EB+Garamond:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;600;700&family=Lora:ital,wght@0,400;0,700;1,400&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&family=Noto+Sans+Devanagari:wght@400;700&family=Noto+Serif+Devanagari:wght@400;700&family=Roboto:ital,wght@0,400;0,700;1,400&family=Roboto+Mono&display=swap">
@@ -18,7 +19,7 @@
 <!-- ============ TOP BAR ============ -->
 <header class="topbar">
   <button class="icon-btn" id="btnSidebar" title="Documents (Ctrl+Shift+O)"><i data-lucide="panel-left"></i></button>
-  <div class="brand"><div class="brand-mark">L</div><span class="brand-name">Lekh</span></div>
+  <div class="brand"><img class="brand-mark" src="icon.svg" alt=""><span class="brand-name">Lekh</span></div>
   <input class="title-input" id="docTitle" type="text" value="" placeholder="Untitled document" aria-label="Document title" spellcheck="false">
   <div class="spacer"></div>
   <span class="pill" id="syncPill" title="Sync status — click for sync settings"><i data-lucide="cloud-off"></i><span>Local only</span></span>
@@ -36,6 +37,7 @@
     <button class="tab" data-tab="review">Review</button>
     <button class="tab" data-tab="mailings">Mailings</button>
     <button class="tab" data-tab="view">View</button>
+    <button class="tab ctx" data-tab="table" id="tabTable" hidden>Table</button>
   </div>
   <div class="panels">
     <!-- HOME -->
@@ -44,6 +46,7 @@
         <button class="icon-btn" data-act="undo" title="Undo (Ctrl+Z)"><i data-lucide="undo-2"></i></button>
         <button class="icon-btn" data-act="redo" title="Redo (Ctrl+Y)"><i data-lucide="redo-2"></i></button>
         <button class="icon-btn" data-act="pastePlain" title="Paste as plain text (Ctrl+Shift+V)"><i data-lucide="clipboard-paste"></i></button>
+        <button class="icon-btn" id="btnPainter" data-act="painter" title="Format painter — click to copy formatting once, double-click to keep it on (Esc to stop)"><i data-lucide="paintbrush"></i></button>
       </div>
       <div class="group">
         <select class="sel-style" id="selStyle" title="Paragraph style">
@@ -57,6 +60,7 @@
           <option value="blockquote">Quote</option>
           <option value="pre">Code</option>
         </select>
+        <button class="icon-btn" data-act="stylesDialog" title="Edit styles &amp; document defaults"><i data-lucide="palette"></i></button>
       </div>
       <div class="group">
         <select class="sel-font" id="selFont" title="Font"></select>
@@ -95,6 +99,7 @@
           <option value="">Line…</option><option value="1.2">1.0</option><option value="1.38">1.15</option>
           <option value="1.8">1.5</option><option value="2.4">2.0</option><option value="3">2.5</option><option value="3.6">3.0</option>
         </select>
+        <button class="icon-btn" data-act="paragraph" title="Paragraph spacing &amp; indents"><i data-lucide="pilcrow"></i></button>
       </div>
       <div class="group">
         <button class="btn" data-act="find" title="Find (Ctrl+F)"><i data-lucide="search"></i><span class="hide-sm">Find</span></button>
@@ -154,6 +159,12 @@
         <button class="btn" data-act="editFooter"><i data-lucide="panel-bottom"></i>Footer</button>
         <button class="btn" data-act="pageNumbers"><i data-lucide="file-text"></i>Page numbers</button>
       </div>
+      <div class="group">
+        <label class="hint" for="selVAlign">Vertical</label>
+        <select id="selVAlign" title="Vertical alignment of text on each page">
+          <option value="top">Top</option><option value="center">Centre</option><option value="bottom">Bottom</option>
+        </select>
+      </div>
     </div>
 
     <!-- REVIEW -->
@@ -208,6 +219,8 @@
       </div>
       <div class="group">
         <button class="btn" id="btnPages" data-act="togglePages"><i data-lucide="file-stack"></i>Page view</button>
+        <button class="btn" id="btnRuler" data-act="toggleRuler"><i data-lucide="ruler"></i>Ruler</button>
+        <button class="btn" id="btnNav" data-act="toggleNav"><i data-lucide="list-tree"></i>Navigation</button>
         <button class="btn" data-act="focusMode"><i data-lucide="focus"></i>Focus mode</button>
         <button class="btn" data-act="fullscreen"><i data-lucide="maximize"></i>Full screen</button>
       </div>
@@ -217,17 +230,75 @@
         <button class="btn" data-act="theme" data-v="system"><i data-lucide="monitor"></i>System</button>
       </div>
     </div>
+    <!-- TABLE (contextual) -->
+    <div class="panel" data-panel="table">
+      <div class="group">
+        <button class="icon-btn" data-tbl="rowAbove" title="Insert row above"><i data-lucide="arrow-up-to-line"></i></button>
+        <button class="icon-btn" data-tbl="rowBelow" title="Insert row below"><i data-lucide="arrow-down-to-line"></i></button>
+        <button class="icon-btn" data-tbl="colLeft" title="Insert column left"><i data-lucide="arrow-left-to-line"></i></button>
+        <button class="icon-btn" data-tbl="colRight" title="Insert column right"><i data-lucide="arrow-right-to-line"></i></button>
+        <button class="btn" data-act="tblDelete"><i data-lucide="trash-2"></i>Delete<i data-lucide="chevron-down"></i></button>
+      </div>
+      <div class="group">
+        <button class="btn" data-tbl="merge" title="Merge selected cells"><i data-lucide="table-cells-merge"></i>Merge</button>
+        <button class="btn" data-tbl="split" title="Split merged cell"><i data-lucide="table-cells-split"></i>Split</button>
+      </div>
+      <div class="group" title="Vertical alignment in cell">
+        <button class="icon-btn" data-tbl="vtop" id="vaTop" title="Align top"><i data-lucide="align-vertical-justify-start"></i></button>
+        <button class="icon-btn" data-tbl="vmiddle" id="vaMiddle" title="Align middle"><i data-lucide="align-vertical-justify-center"></i></button>
+        <button class="icon-btn" data-tbl="vbottom" id="vaBottom" title="Align bottom"><i data-lucide="align-vertical-justify-end"></i></button>
+      </div>
+      <div class="group">
+        <span class="split">
+          <button class="icon-btn color-btn" data-act="tblShade" title="Cell shading"><i data-lucide="paint-bucket"></i><span class="swatch" id="shadeSwatch" style="background:#dbe7fb"></span></button>
+          <button class="icon-btn caret color-btn" title="Choose shading colour"><i data-lucide="chevron-down"></i><input type="color" id="shadeColor" value="#dbe7fb"></button>
+        </span>
+        <button class="icon-btn" data-tbl="noShade" title="Remove shading"><i data-lucide="eraser"></i></button>
+      </div>
+      <div class="group">
+        <select id="selTblStyle" title="Table style" style="width:118px">
+          <option value="grid">Grid</option><option value="blue">Blue header</option><option value="banded">Banded</option><option value="minimal">Minimal lines</option><option value="plain">Plain</option>
+        </select>
+        <select id="selTblBorders" title="Borders" style="width:138px">
+          <option value="all">All borders</option><option value="outer">Outside only</option><option value="horiz">Horizontal only</option><option value="none">No borders</option>
+        </select>
+      </div>
+      <div class="group">
+        <select id="selTblWrap" title="Text wrapping around the table" style="width:148px">
+          <option value="">Wrap: none</option><option value="left">Wrap: table left</option><option value="right">Wrap: table right</option>
+        </select>
+      </div>
+      <div class="group">
+        <button class="btn" data-tbl="header" id="btnTblHeader">Header row</button>
+        <button class="btn" data-tbl="banded" id="btnTblBanded">Banded rows</button>
+      </div>
+      <div class="group">
+        <button class="btn" data-tbl="distribute" title="Make all columns the same width"><i data-lucide="columns-3"></i>Even columns</button>
+        <button class="btn" data-tbl="fitPage" id="btnFitPage" title="Table spans the page width">Fit page</button>
+        <button class="btn" data-tbl="fitContent" id="btnFitContent" title="Columns shrink to their content">Fit contents</button>
+      </div>
+    </div>
   </div>
 </nav>
 
 <!-- ============ MAIN ============ -->
 <div class="main">
   <aside class="sidebar" id="sidebar">
-    <div class="side-head">
-      <button class="btn primary" data-act="newDoc"><i data-lucide="file-plus"></i>New document</button>
-      <input class="side-search" id="docSearch" type="search" placeholder="Search documents…">
+    <div class="side-tabs">
+      <button class="side-tab active" data-side="docs"><i data-lucide="files"></i>Documents</button>
+      <button class="side-tab" data-side="nav"><i data-lucide="list-tree"></i>Navigation</button>
     </div>
-    <div class="doc-list" id="docList"></div>
+    <div class="side-pane" data-pane="docs">
+      <div class="side-head">
+        <button class="btn primary" data-act="newDoc"><i data-lucide="file-plus"></i>New document</button>
+        <input class="side-search" id="docSearch" type="search" placeholder="Search documents…">
+      </div>
+      <div class="doc-list" id="docList"></div>
+    </div>
+    <div class="side-pane" data-pane="nav" hidden>
+      <div class="nav-hint">Click a heading to jump. Drag, or use the arrows, to move a whole section.</div>
+      <div class="nav-list" id="navList"></div>
+    </div>
     <div class="side-foot">
       <button class="btn small" data-act="import"><i data-lucide="file-up"></i>Import</button>
       <button class="btn small" data-act="syncSettings"><i data-lucide="cloud"></i>Sync</button>
@@ -237,6 +308,7 @@
 
   <section class="canvas" id="canvas">
     <div class="page-wrap" id="pageWrap">
+      <div class="ruler-h" id="hRuler"></div>
       <div class="page" id="page">
         <div class="sheets" id="sheets"></div>
         <div class="overlays" id="overlays"></div>
@@ -265,13 +337,13 @@
       <button class="btn" data-img="75">75%</button>
       <button class="btn" data-img="100">100%</button>
       <span class="sep"></span>
-      <button class="icon-btn" data-img="left" title="Float left, text wraps"><i data-lucide="align-left"></i></button>
-      <button class="icon-btn" data-img="center" title="Centre on its own line"><i data-lucide="align-center"></i></button>
-      <button class="icon-btn" data-img="right" title="Float right, text wraps"><i data-lucide="align-right"></i></button>
+      <button class="btn" data-img="wrap" title="Text wrapping"><i data-lucide="wrap-text"></i>Wrap<i data-lucide="chevron-down"></i></button>
       <span class="sep"></span>
       <button class="btn" data-img="alt">Alt text</button>
       <button class="icon-btn" data-img="delete" title="Delete image"><i data-lucide="trash-2"></i></button>
     </div>
+
+    <div class="img-handle" id="imgHandle" title="Drag to resize"></div>
 
     <div class="floatbar" id="linkBar">
       <a class="btn" id="linkOpen" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link"></i><span id="linkHref" style="max-width:200px;overflow:hidden;text-overflow:ellipsis"></span></a>
