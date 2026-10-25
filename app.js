@@ -14,6 +14,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const TAB_ID = uid('t');
+const LEKH_VERSION = 9;
 const GIST_DESC = 'Lekh documents (sync) — do not edit by hand';
 const editor = $('#editor'), page = $('#page'), pageWrap = $('#pageWrap'), canvas = $('#canvas');
 const hdr = $('#hdr'), ftr = $('#ftr');
@@ -85,14 +86,62 @@ const SANITIZE = {
   ALLOW_DATA_ATTR: true
 };
 function sanitize(html) {
-  if (!window.DOMPurify) return String(html || '');
-  return DOMPurify.sanitize(String(html || ''), SANITIZE);
+  html = Img.extern(String(html || ''));
+  if (!window.DOMPurify) return html;
+  return DOMPurify.sanitize(html, SANITIZE);
+}
+
+/* Images live in the editor as short blob: URLs; the full base64 data is kept here and only
+   put back when the document is saved, exported or copied. Without this every keystroke,
+   undo step and save copies megabytes of image text and big documents become laggy. */
+const Img = {
+  toBlob: new Map(), toData: new Map(),
+  blobFor(data) {
+    let u = this.toBlob.get(data); if (u) return u;
+    const m = /^data:([^;,]+)(;base64)?,(.*)$/s.exec(data); if (!m) return null;
+    let bytes;
+    try {
+      if (m[2]) { const bin = atob(m[3]); bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); }
+      else bytes = new TextEncoder().encode(decodeURIComponent(m[3]));
+    } catch { return null; }
+    u = URL.createObjectURL(new Blob([bytes], { type: m[1] }));
+    this.toBlob.set(data, u); this.toData.set(u, data); return u;
+  },
+  intern(root) {
+    for (const im of root.querySelectorAll('img[src^="data:"]')) {
+      const src = im.getAttribute('src'); if (src.length < 2048) continue;   // tiny icons: not worth it
+      const u = this.blobFor(src); if (u) im.setAttribute('src', u);
+    }
+  },
+  extern(html) { return this.toData.size && html.includes('blob:') ? html.replace(/blob:[^"'\s)&]+/g, u => this.toData.get(u) || u) : html; },
+  data(src) { return this.toData.get(src) || src; }
+};
+/* Shrink oversized pictures (e.g. from imported Word files) the same way inserted images are. */
+async function shrinkImages(html) {
+  if (!/src="data:image\/(?:png|jpe?g|bmp|webp)/i.test(html)) return html;
+  const t = document.createElement('template'); t.innerHTML = html;
+  for (const im of t.content.querySelectorAll('img[src^="data:image/"]')) {
+    const src = im.getAttribute('src'); if (src.length < 300e3 || /^data:image\/(gif|svg)/i.test(src)) continue;
+    try {
+      const i = await new Promise((res, rej) => { const x = new Image(); x.onload = () => res(x); x.onerror = rej; x.src = src; });
+      const s = Math.min(1, 1600 / Math.max(i.naturalWidth, i.naturalHeight || 1));
+      const w = Math.max(1, Math.round(i.naturalWidth * s)), h = Math.max(1, Math.round(i.naturalHeight * s));
+      const c = document.createElement('canvas'); c.width = w; c.height = h; const ctx = c.getContext('2d');
+      const png = /^data:image\/png/i.test(src);
+      if (!png) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); }
+      ctx.drawImage(i, 0, 0, w, h);
+      let out = c.toDataURL(png ? 'image/png' : 'image/jpeg', 0.85);
+      if (png && out.length > 900e3) { ctx.globalCompositeOperation = 'destination-over'; ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); out = c.toDataURL('image/jpeg', 0.85); }
+      if (out.length < src.length) im.setAttribute('src', out);
+    } catch {}
+  }
+  return t.innerHTML;
 }
 
 /* ------------------------------------------------------------------ state */
 let docs = new Map();
 let cur = null;
-let saveTimer = null, pendingSave = false, lastRange = null, forcePlain = false;
+let saveTimer = null, editorSrc = null, pendingSave = false, lastRange = null, forcePlain = false;
 const bc = 'BroadcastChannel' in window ? new BroadcastChannel('lekh') : null;
 const post = msg => { try { bc && bc.postMessage({ ...msg, tab: TAB_ID }); } catch {} };
 
@@ -290,8 +339,9 @@ const History = {
     if (!cur) return;
     const now = Date.now();
     if (!force && type === this.lastType && now - this.last < 1200) { this.last = now; return; }
-    this.stack.push({ html: editor.innerHTML, sel: saveSelPath() });
-    const cap = editor.innerHTML.length > 1e6 ? 20 : 120;
+    const html = editor.innerHTML;
+    this.stack.push({ html, sel: saveSelPath() });
+    const cap = html.length > 1e6 ? 30 : 120;
     while (this.stack.length > cap) this.stack.shift();
     this.redo = []; this.last = now; this.lastType = type;
   },
@@ -334,8 +384,10 @@ async function openDoc(id, { keepScroll = false } = {}) {
 function renderCurrent({ keepScroll = true, force = false } = {}) {
   if (!cur) return;
   const top = canvas.scrollTop;
-  const html = sanitize(cur.html);
-  if (force || editor.innerHTML !== html) editor.innerHTML = html || '<p><br></p>';
+  if (force || cur.html !== editorSrc) {
+    editor.innerHTML = sanitize(cur.html) || '<p><br></p>';
+    Img.intern(editor); editorSrc = cur.html;
+  }
   if (document.activeElement !== $('#docTitle')) $('#docTitle').value = cur.title === 'Untitled document' ? '' : cur.title;
   if (document.activeElement !== hdr) hdr.innerText = cur.header || '';
   if (document.activeElement !== ftr) ftr.innerText = cur.footer || '';
@@ -350,7 +402,8 @@ function renderCurrent({ keepScroll = true, force = false } = {}) {
 function markChanged() {
   if (!cur) return;
   pendingSave = true; setSaveStatus('Editing…');
-  clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 600); Nav.schedule();
+  if (editor.querySelector('img[src^="data:"]')) Img.intern(editor);
+  clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, (cur.html || '').length > 2e6 ? 1500 : 600); Nav.schedule();
   scheduleStats(); scheduleGuides();
 }
 function cleanHTML() {
@@ -362,15 +415,15 @@ function cleanHTML() {
   const h = editor.innerHTML;
   t.forEach(el => el.classList.add(el.tagName === 'IMG' ? 'img-selected' : el.classList.contains('cmt') ? 'active' : 'flash'));
   cs.forEach(el => el.classList.add('cell-sel')); ms.forEach(el => el.classList.add('multi-sel'));
-  return h.replace(/<(span|div) class="pg-gap"[^>]*><\/\1>/g, '').replace(/<tr class="pg-gap"[^>]*>[\s\S]*?<\/tr>/g, '')
-    .replace(/ cols-flow/g, '').replace(/(<span class="mf"[^>]*?) data-v="[^"]*"/g, '$1').replace(/ class=""/g, '');
+  return Img.extern(h.replace(/<(span|div) class="pg-gap"[^>]*><\/\1>/g, '').replace(/<tr class="pg-gap"[^>]*>[\s\S]*?<\/tr>/g, '')
+    .replace(/ cols-flow/g, '').replace(/(<span class="mf"[^>]*?) data-v="[^"]*"/g, '$1').replace(/ class=""/g, ''));
 }
 async function saveNow() {
   clearTimeout(saveTimer);
   if (!cur || !pendingSave) return;
   pendingSave = false;
   if (editor.querySelector('.toc')) updateTOCs(true);
-  cur.html = cleanHTML(); cur.pristine = false;
+  cur.html = cleanHTML(); editorSrc = cur.html; cur.pristine = false;
   cur.header = hdr.innerText.replace(/\n+$/, '');
   cur.footer = ftr.innerText.replace(/\n+$/, '');
   touch(cur);
@@ -1786,6 +1839,19 @@ editor.addEventListener('beforeinput', e => {
     if (trackedDelete(t)) { e.preventDefault(); markChanged(); }
   } else if (t === 'insertFromDrop') { e.preventDefault(); }
 });
+/* Copy/cut: put the real image data on the clipboard (blob: links only work inside this tab). */
+function copyWithImages(e, cut) {
+  const sel = getSelection(); if (!sel.rangeCount || sel.isCollapsed) return;
+  const box = document.createElement('div'); box.appendChild(sel.getRangeAt(0).cloneContents());
+  if (!box.querySelector('img[src^="blob:"]')) return;      // nothing special: let the browser do it
+  $$('.pg-gap', box).forEach(g => g.remove());
+  e.preventDefault();
+  e.clipboardData.setData('text/html', Img.extern(box.innerHTML));
+  e.clipboardData.setData('text/plain', sel.toString());
+  if (cut) { History.push('op', true); document.execCommand('delete'); }
+}
+editor.addEventListener('copy', e => copyWithImages(e, false));
+editor.addEventListener('cut', e => copyWithImages(e, true));
 editor.addEventListener('input', e => {
   if (!editor.firstElementChild && editor.textContent.trim() === '') editor.innerHTML = '<p><br></p>';
   if (e.inputType === 'insertText' && e.data && e.data.length === 1) AC.onInput(e.data);
@@ -3161,7 +3227,7 @@ async function importFile(f) {
       try {
         await libReady('JSZip', 'the Word importer');
         const r = await LekhDocx.convert(await f.arrayBuffer());
-        await createDoc({ title: base, html: sanitize(r.html) || '<p><br></p>', header: r.header, footer: r.footer, page: r.page, comments: r.comments });
+        await createDoc({ title: base, html: sanitize(await shrinkImages(r.html)) || '<p><br></p>', header: r.header, footer: r.footer, page: r.page, comments: r.comments });
         toast(`Imported “${base}”`); return;
       } catch (err) { console.warn('[import] falling back to basic importer', err); }
     }
@@ -3182,7 +3248,7 @@ async function importFile(f) {
     } else {
       html = (await f.text()).replace(/\r\n?/g, '\n').split('\n').map(l => l.trim() ? `<p>${esc(l)}</p>` : '<p><br></p>').join('');
     }
-    await createDoc({ title: base, html: sanitize(html) || '<p><br></p>' });
+    await createDoc({ title: base, html: sanitize(await shrinkImages(html)) || '<p><br></p>' });
     toast(note || 'Imported “' + base + '”');
   } catch (e) { console.error(e); toast('Import failed: ' + e.message, { err: true }); }
 }
@@ -3221,7 +3287,7 @@ function finalClone(root = editor) {
   $$('del.tc', c).forEach(d => d.remove());
   $$('ins.tc, .cmt', c).forEach(i => i.replaceWith(...i.childNodes));
   $$('.img-selected', c).forEach(i => i.classList.remove('img-selected'));
-  c.innerHTML = c.innerHTML.replace(/​/g, '');
+  c.innerHTML = Img.extern(c.innerHTML.replace(/​/g, ''));
   return c;
 }
 async function exportAs(kind, d = cur) {
@@ -3338,7 +3404,7 @@ async function buildDocx(d, root) {
     return new D.TextRun(o);
   }
   function imageRun(img) {
-    let src = img.getAttribute('src') || '';
+    let src = Img.data(img.getAttribute('src') || '');
     const m = /^data:image\/([a-z+]+);base64,(.*)$/i.exec(src);
     let type = m ? m[1].toLowerCase().replace('jpeg', 'jpg') : null;
     let b64 = m ? m[2] : null;
@@ -3613,7 +3679,7 @@ async function settingsDialog() {
   const r = await promptDialog('Settings', [
     { name: 'author', label: 'Your name (for comments and tracked changes)', value: settings.author },
     { name: 'units', label: 'Ruler units', type: 'select', value: settings.units || 'in', options: [['in', 'Inches'], ['cm', 'Centimetres']] }
-  ], 'Save', est ? `<div class="notice">${esc(est)}. Documents are stored in this browser${Sync.enabled() ? ' and backed up to your GitHub Gist' : ' only — set up Sync or download a backup now and then'}.</div>` : '');
+  ], 'Save', est ? `<div class="notice">Lekh version ${LEKH_VERSION}. ${esc(est)}. Documents are stored in this browser${Sync.enabled() ? ' and backed up to your GitHub Gist' : ' only — set up Sync or download a backup now and then'}.</div>` : '');
   if (r) { settings.author = r.author.trim() || 'Me'; settings.units = r.units; saveSettings(); Ruler.render(); Pager.sig = ''; Pager.run(); toast('Settings saved'); }
 }
 function showShortcuts() {
