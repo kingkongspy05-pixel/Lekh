@@ -2791,20 +2791,46 @@ window.addEventListener('resize', () => { if (settings.pageView === 'web') { cle
 function readMode() {
   if (!cur) return; if (pendingSave) saveNow();
   const c = finalClone(); $$('[contenteditable]', c).forEach(x => x.removeAttribute('contenteditable')); $$('[id]', c).forEach(x => { if (!/^h-/.test(x.id)) x.removeAttribute('id'); });
+  $$('.toc a', c).forEach(a => a.removeAttribute('href'));
   const rd = $('#reader');
+  const theme = settings.readTheme || 'light', paged = settings.readPaged !== false;
+  rd.className = `reader show rt-${theme}${paged ? ' paged' : ''}`;
   rd.innerHTML = `<div class="reader-bar"><span class="t">${esc(cur.title)}</span>
-    <button class="btn small outline" data-r="font">Aa</button><button class="btn small outline" data-r="smaller">A−</button><button class="btn small outline" data-r="bigger">A+</button>
-    <button class="btn small primary" data-r="close"><i data-lucide="x"></i>Close</button></div><div class="reader-body${settings.readSans ? ' sans' : ''}" style="font-size:${settings.readSize || 13.5}pt"></div>`;
-  $('.reader-body', rd).appendChild(c); c.removeAttribute('id'); c.className = '';
-  rd.classList.add('show'); icons(); rd.scrollTop = 0; rd.focus();
+    <span class="r-pos" id="rPos"></span>
+    <div class="r-group">${[['light', 'Light'], ['sepia', 'Sepia'], ['dark', 'Dark']].map(([k, l]) => `<button class="btn small ${k === theme ? 'on' : 'outline'}" data-r="theme" data-v="${k}">${l}</button>`).join('')}</div>
+    <button class="btn small outline" data-r="layout" title="Switch between pages and continuous scroll">${paged ? 'Scroll' : 'Pages'}</button>
+    <button class="btn small outline" data-r="font" title="Serif / sans-serif">Aa</button><button class="btn small outline" data-r="smaller">A−</button><button class="btn small outline" data-r="bigger">A+</button>
+    <button class="btn small primary" data-r="close"><i data-lucide="x"></i>Close</button></div>
+    <div class="reader-scroll"><div class="reader-body${settings.readSans ? ' sans' : ''}" style="font-size:${settings.readSize || 13.5}pt"></div></div>
+    <button class="r-nav prev" data-r="prev" title="Previous (←)"><i data-lucide="chevron-left"></i></button><button class="r-nav next" data-r="next" title="Next (→)"><i data-lucide="chevron-right"></i></button>`;
+  const body = $('.reader-body', rd), sc = $('.reader-scroll', rd);
+  body.appendChild(c); c.removeAttribute('id'); c.className = 'r-doc';
+  if (!c.textContent.trim() && !c.querySelector('img, table')) body.insertAdjacentHTML('afterbegin', '<p style="opacity:.6">This document is empty.</p>');
+  icons(); sc.scrollLeft = 0; sc.scrollTop = 0;
+  const step = () => { const cs = getComputedStyle(body); return body.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) + (parseFloat(cs.columnGap) || 0); };
+  const pages = () => Math.max(1, Math.ceil((sc.scrollWidth - 2) / step()));
+  const at = () => Math.round(sc.scrollLeft / step());
+  const pos = () => { const el = $('#rPos'); if (!el) return; if (!rd.classList.contains('paged')) { el.textContent = ''; return; } el.textContent = `Screen ${at() + 1} of ${pages()}`; };
+  const go = (d, abs) => { if (abs != null) { sc.scrollLeft = clamp(abs, 0, pages() - 1) * step(); pos(); return; } if (!rd.classList.contains('paged')) { sc.scrollBy({ top: d * sc.clientHeight * 0.9, behavior: 'smooth' }); return; } sc.scrollTo({ left: clamp(at() + d, 0, pages() - 1) * step(), behavior: 'smooth' }); setTimeout(pos, 350); };
+  readMode.go = go;
+  sc.onscroll = () => { clearTimeout(readMode.t); readMode.t = setTimeout(pos, 80); };
+  setTimeout(pos, 50);
   rd.onclick = e => {
-    const b = e.target.closest('[data-r]'); if (!b) return; const body = $('.reader-body', rd);
-    if (b.dataset.r === 'close') { rd.classList.remove('show'); rd.innerHTML = ''; return; }
-    if (b.dataset.r === 'font') { settings.readSans = !settings.readSans; body.classList.toggle('sans', settings.readSans); }
-    else { settings.readSize = clamp((settings.readSize || 13.5) + (b.dataset.r === 'bigger' ? 1 : -1), 10, 24); body.style.fontSize = settings.readSize + 'pt'; }
-    saveSettings();
+    const b = e.target.closest('[data-r]'); if (!b) return; const r = b.dataset.r;
+    if (r === 'close') { rd.className = 'reader'; rd.innerHTML = ''; readMode.go = null; return; }
+    if (r === 'prev' || r === 'next') { go(r === 'next' ? 1 : -1); return; }
+    if (r === 'theme') settings.readTheme = b.dataset.v;
+    else if (r === 'layout') settings.readPaged = !rd.classList.contains('paged');
+    else if (r === 'font') settings.readSans = !settings.readSans;
+    else settings.readSize = clamp((settings.readSize || 13.5) + (r === 'bigger' ? 1 : -1), 10, 26);
+    saveSettings(); const keep = at(); readMode(); if (r !== 'layout') setTimeout(() => { readMode.go && readMode.go(0, keep); }, 30);
   };
 }
+document.addEventListener('keydown', e => {
+  if (!readMode.go || !$('#reader').classList.contains('show')) return;
+  if (['ArrowRight', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); readMode.go(1); }
+  else if (['ArrowLeft', 'PageUp'].includes(e.key)) { e.preventDefault(); readMode.go(-1); }
+});
 function multiPages(perRow) {
   if (!cur) return;
   if (settings.pageView !== 'pages') setView('pages');
