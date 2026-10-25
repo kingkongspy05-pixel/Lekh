@@ -48,6 +48,8 @@ How it behaves:
 After connecting sync, open **Sync → Turn on encryption** and choose a passphrase. Lekh moves everything into a fresh gist where every document is encrypted (AES-256) in your browser before upload, and deletes the old readable gist so no plain-text history remains. Other devices ask for the passphrase once. **If you forget the passphrase, the synced copies cannot be opened** — documents already on your devices stay readable.
 
 ### Writing tools
+- **Home tab like Word's**: Cut / Copy / Paste, grow & shrink font (Ctrl+] / Ctrl+[), change case (Aa), bullet and numbering styles (incl. 1.1.1 multilevel), sort A–Z, show ¶ marks, paragraph & cell **shading**, **Borders** (bottom/top/left/right/all/outside/inside/none with line weight, style and colour — for table cells or paragraphs), Select.
+- **Views** (bottom right, like Word): Focus, **Read mode**, **Print layout**, **Web layout**, **Multiple pages** (1–4 pages per row; click one to edit it).
 - **Navigation pane** (View → Navigation, or the sidebar tab): your headings as an outline; click to jump; drag or use the arrows to move a whole section with its sub-headings.
 - **Rulers**: drag the grey edges to change margins (top/bottom on the left ruler), and the blue triangles to set first-line, left and right indents. Units in File → Settings.
 - **Styles** (palette button next to the style list): change the font, size, colour and spacing of Normal, Title, Subtitle, Headings and Quote for this document — or for every new document.

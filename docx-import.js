@@ -31,6 +31,13 @@ const BASE = {
   h3: { font: 'Calibri', sz: 12.5, color: '2F5496', b: true }, h4: { font: 'Calibri', sz: 11, color: '2F5496', b: true, i: true },
   title: { font: 'Calibri', sz: 28, color: '000000' }, subtitle: { font: 'Calibri', sz: 14, color: '5B6472' }
 };
+function bdrCSS(el) {                       // a Word border element → CSS border shorthand
+  if (!el) return '';
+  const v = at(el, 'val') || 'single'; if (/^(nil|none)$/.test(v)) return '1px hidden transparent';
+  const st = v === 'double' ? 'double' : /dash/.test(v) ? 'dashed' : /dot/.test(v) ? 'dotted' : 'solid';
+  const px = Math.max(1, Math.round(((+at(el, 'sz') || 4) / 8) / 0.75 * 10) / 10) * (st === 'double' ? 3 : 1);
+  const c = at(el, 'color'); return `${px}px ${st} ${c && c !== 'auto' ? '#' + c : '#000000'}`;
+}
 const SIZES = { A4: [8.27, 11.69], Letter: [8.5, 11], Legal: [8.5, 14], A5: [5.83, 8.27] };
 
 function cssFont(f) {
@@ -82,6 +89,8 @@ function parsePPr(pPr) {
       case 'numPr': { const n = at(kid(c, 'numId'), 'val'); const l = at(kid(c, 'ilvl'), 'val'); if (n != null) o.numId = n; if (l != null) o.ilvl = +l; break; }
       case 'pageBreakBefore': o.pbb = onOff(c); break;
       case 'outlineLvl': o.outline = +at(c, 'val'); break;
+      case 'pBdr': o.bdr = Object.fromEntries(['top', 'bottom', 'left', 'right'].map(k => [k, bdrCSS(kid(c, k))]).filter(([, v]) => v && !/hidden/.test(v))); break;
+      case 'shd': { const f = at(c, 'fill'); if (f && f !== 'auto' && !/^F{6}$/i.test(f)) o.shd = f; break; }
       case 'sectPr': o.sectPr = c; break;
     }
   }
@@ -220,6 +229,7 @@ async function convert(buf) {
       if (hit) page.size = hit[0]; else { page.size = 'Custom'; page.w = +pw.toFixed(2); page.h = +ph.toFixed(2); }
       contentWidthPx = w * 96;
     }
+    const va = at(kid(lastSect, 'vAlign'), 'val'); if (va === 'center' || va === 'bottom') page.valign = va;
     if (mar) {
       const g = k => Math.max(0, Math.round(((+at(mar, k) || 0) / 1440) * 100) / 100);
       page.margins = { t: g('top') || 0.5, r: g('right'), b: g('bottom') || 0.5, l: g('left') };
@@ -282,8 +292,10 @@ async function convert(buf) {
     const anchor = desc(el, 'anchor')[0];
     if (anchor) {
       const align = (desc(anchor, 'align')[0] || {}).textContent;
-      if (align === 'right') style += ';float:right;margin:2px 0 6px 12px';
-      else if (align === 'left') style += ';float:left;margin:2px 12px 6px 0';
+      const tb = desc(anchor, 'wrapTopAndBottom').length;
+      if (tb) style += align === 'right' ? ';display:block;margin:6px 0 6px auto' : align === 'center' ? ';display:block;margin:6px auto' : ';display:block;margin:6px auto 6px 0';
+      else if (align === 'right') style += ';float:right;margin:2px 0 6px 14px';
+      else if (align === 'left') style += ';float:left;margin:2px 14px 6px 0';
       else if (align === 'center') style += ';display:block;margin:6px auto';
     }
     return `<img src="${src}" alt="${esc(alt)}" style="${style}">`;
@@ -376,6 +388,8 @@ async function convert(buf) {
     const inner = inline(p, { ...env, paraR, base: BASE[baseKey] });
     const st = [];
     if (pp.jc === 'center') st.push('text-align:center'); else if (pp.jc === 'right' || pp.jc === 'end') st.push('text-align:right'); else if (pp.jc === 'both' || pp.jc === 'distribute') st.push('text-align:justify');
+    if (own.bdr) { for (const [k, v] of Object.entries(own.bdr)) st.push(`border-${k}:${v}`); if (Object.keys(own.bdr).length) st.push('padding:2pt 4pt'); }
+    if (own.shd) st.push(`background-color:#${own.shd}`);
     if (pp.lineRule === 'auto' && pp.line && pp.line !== 240 && pp.line !== 259 && pp.line !== 276) st.push(`line-height:${Math.round((pp.line / 240) * 1.2 * 100) / 100}`);
     const listed = pp.numId && pp.numId !== '0';
     if (!listed) {
@@ -395,7 +409,8 @@ async function convert(buf) {
         const lvl = numbering(pp.numId, pp.ilvl || 0) || { fmt: 'bullet' };
         const ordered = !/bullet|none/.test(lvl.fmt);
         const type = { lowerLetter: 'a', upperLetter: 'A', lowerRoman: 'i', upperRoman: 'I' }[lvl.fmt] || '';
-        items.push({ list: { ilvl: pp.ilvl || 0, tag: ordered ? 'ol' : 'ul', type, check: /[☐□❑]/.test(lvl.text) }, inner: content, liAttr: style });
+        const bullet = ordered ? '' : /[○o◦]/.test(lvl.text) ? 'circle' : /[■▪§]/.test(lvl.text) ? 'square' : /[✓✔ü]/.test(lvl.text) ? 'check' : /[➤➢Ø>]/.test(lvl.text) ? 'arrow' : /[–-]/.test(lvl.text) ? 'dash' : '';
+        items.push({ list: { ilvl: pp.ilvl || 0, tag: ordered ? 'ol' : 'ul', type, bullet, check: /[☐□❑]/.test(lvl.text) }, inner: content, liAttr: style });
       } else items.push({ html: `<${tag}${cls ? ` class="${cls}"` : ''}${style}>${content}</${tag}>` });
     });
     return { items, sectPr: own.sectPr || null };
@@ -408,8 +423,9 @@ async function convert(buf) {
       const tcs = kids(tr).flatMap(x => x.localName === 'tc' ? [x] : x.localName === 'sdt' ? kids(kid(x, 'sdtContent'), 'tc') : []);
       for (const tc of tcs) {
         const pr = kid(tc, 'tcPr'); const span = +(at(kid(pr, 'gridSpan'), 'val') || 1);
-        const vm = kid(pr, 'vMerge'); const fill = at(kid(pr, 'shd'), 'fill');
-        cells.push({ tc, col, span, vm: vm ? (at(vm, 'val') === 'restart' ? 'restart' : 'continue') : null, bg: fill && fill !== 'auto' && !/^F{6}$/i.test(fill) ? fill : null, th: header, rs: 1 });
+        const vm = kid(pr, 'vMerge'); const fill = at(kid(pr, 'shd'), 'fill'); const va = at(kid(pr, 'vAlign'), 'val');
+        const tb = kid(pr, 'tcBorders'); const bd = tb ? ['top', 'bottom', 'left', 'right'].map(k => [k, bdrCSS(kid(tb, k) || kid(tb, k === 'left' ? 'start' : k === 'right' ? 'end' : k))]).filter(([, v]) => v) : [];
+        cells.push({ bd, tc, col, span, vm: vm ? (at(vm, 'val') === 'restart' ? 'restart' : 'continue') : null, bg: fill && fill !== 'auto' && !/^F{6}$/i.test(fill) ? fill : null, th: header, rs: 1, va: va === 'center' ? 'middle' : va === 'bottom' ? 'bottom' : '' });
         col += span;
       }
       grid.push(cells);
@@ -418,13 +434,19 @@ async function convert(buf) {
       if (c.vm !== 'continue') return; c.skip = true;
       for (let up = ri - 1; up >= 0; up--) { const a = grid[up].find(x => x.col === c.col); if (!a) break; if (!a.skip) { a.rs++; break; } }
     }));
-    let html = '<table><tbody>';
+    const gridW = kids(kid(tbl, 'tblGrid'), 'gridCol').map(g => +at(g, 'w') || 0);
+    const sumW = gridW.reduce((a, b) => a + b, 0);
+    const tb = kid(kid(tbl, 'tblPr'), 'tblBorders');
+    const noB = tb && kids(tb).length && kids(tb).every(b => /^(nil|none)$/.test(at(b, 'val') || ''));
+    const tp = kid(kid(tbl, 'tblPr'), 'tblpPr'); const tx = tp && at(tp, 'tblpXSpec');
+    const wrapA = tp ? ` data-wrap="${tx === 'right' ? 'right' : 'left'}"` : '';
+    let html = `<table${noB ? ' data-borders="none"' : ''}${wrapA}>` + (sumW && gridW.length > 1 ? '<colgroup>' + gridW.map(w => `<col style="width:${Math.round(w / sumW * 10000) / 100}%">`).join('') + '</colgroup>' : '') + '<tbody>';
     for (const cells of grid) {
       html += '<tr>';
       for (const c of cells) {
         if (c.skip) continue; const t = c.th ? 'th' : 'td';
         const inner = blocksHTML(kids(c.tc), env).html;
-        html += `<${t}${c.span > 1 ? ` colspan="${c.span}"` : ''}${c.rs > 1 ? ` rowspan="${c.rs}"` : ''}${c.bg ? ` style="background-color:#${c.bg}"` : ''}>${inner || '<br>'}</${t}>`;
+        html += `<${t}${c.span > 1 ? ` colspan="${c.span}"` : ''}${c.rs > 1 ? ` rowspan="${c.rs}"` : ''}${c.bg || c.va || c.bd.length ? ` style="${c.bg ? `background-color:#${c.bg};` : ''}${c.va ? `vertical-align:${c.va};` : ''}${c.bd.map(([k, v]) => `border-${k}:${v};`).join('')}"` : ''}>${inner || '<br>'}</${t}>`;
       }
       html += '</tr>';
     }
@@ -435,14 +457,14 @@ async function convert(buf) {
     const close = () => { html += `</li></${stack.pop().tag}>`; };
     for (const it of items) {
       if (!it.list) { while (stack.length) close(); html += it.html; continue; }
-      const { ilvl, tag, type, check } = it.list;
+      const { ilvl, tag, type, check, bullet } = it.list;
       while (stack.length && stack[stack.length - 1].ilvl > ilvl) close();
       const top = stack[stack.length - 1];
       if (top && top.ilvl === ilvl) {
         if (top.tag === tag && top.check === check) { html += `</li><li${it.liAttr}${check ? ' data-checked="false"' : ''}>${it.inner}`; continue; }
         close();
       }
-      html += `<${tag}${type ? ` type="${type}"` : ''}${check ? ' class="checklist"' : ''}><li${it.liAttr}${check ? ' data-checked="false"' : ''}>${it.inner}`;
+      html += `<${tag}${type ? ` type="${type}"` : ''}${bullet ? ` data-bullet="${bullet}"` : ''}${check ? ' class="checklist"' : ''}><li${it.liAttr}${check ? ' data-checked="false"' : ''}>${it.inner}`;
       stack.push({ tag, ilvl, check });
     }
     while (stack.length) close();

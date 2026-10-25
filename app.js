@@ -193,7 +193,7 @@ async function promptDialog(title, fields, okLabel = 'OK', extraHTML = '') {
     ${f.hint ? `<div class="hint">${f.hint}</div>` : ''}</div>`).join('');
   const read = () => Object.fromEntries(fields.map(f => [f.name, $(`[name="${f.name}"]`, form).value]));
   form.onsubmit = e => { e.preventDefault(); closeModal(read()); };
-  form.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); closeModal(read()); } });
+  form.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) { e.preventDefault(); closeModal(read()); } });
   return modal({ title, body: form, buttons: [{ label: 'Cancel', value: null }, { label: okLabel, primary: true, value: read }] });
 }
 const confirmDialog = (title, message, okLabel = 'OK', danger = false) =>
@@ -420,8 +420,10 @@ function pageDims(d = cur) {
 function portraitDims(d) { return d.page.size === 'Custom' ? [d.page.w || 8.27, d.page.h || 11.69] : (PAGE_SIZES[d.page.size] || PAGE_SIZES.A4); }
 function applyPage() {
   const { w, h } = pageDims(); const m = cur.page.margins;
-  page.style.width = w + 'in';
-  page.style.padding = `${m.t}in ${m.r}in ${m.b}in ${m.l}in`;
+  const web = settings.pageView === 'web';
+  document.body.classList.toggle('web-view', web);
+  if (web) { const z = clamp(settings.zoom, 30, 200) / 100; page.style.width = Math.max(320, (canvas.clientWidth - 48) / z) + 'px'; page.style.padding = `24px 48px`; }
+  else { page.style.width = w + 'in'; page.style.padding = `${m.t}in ${m.r}in ${m.b}in ${m.l}in`; }
   $('#pageHeader').style.cssText = `height:${m.t}in;padding:0 ${m.r}in 0 ${m.l}in`;
   $('#pageFooter').style.cssText = `top:${h - m.b}in;height:${m.b}in;padding:0 ${m.r}in 0 ${m.l}in`;
   $('#selPage').value = cur.page.size;
@@ -439,7 +441,7 @@ function applyPage() {
    print. Spacers are stripped before every save, export and copy. */
 const Pager = {
   G: 28, timer: null, sig: '', composing: false, fnCache: new Map(), geo: null, pendingRender: false,
-  on() { return settings.pageView !== 'continuous' || document.body.classList.contains('printing'); },
+  on() { return settings.pageView === 'pages' || !settings.pageView || document.body.classList.contains('printing'); },
   printing() { return document.body.classList.contains('printing'); },
   cost: 0,
   schedule(ms = 140) { clearTimeout(this.timer); this.timer = setTimeout(() => this.run(), Math.max(ms, Math.min(900, this.cost * 3))); },
@@ -1911,6 +1913,8 @@ $$('[data-tbl]').forEach(b => b.addEventListener('click', () => tableOp(b.datase
 $('#selTblStyle').addEventListener('change', e => setTableAttr('ts', e.target.value, 'grid'));
 $('#selTblBorders').addEventListener('change', e => setTableAttr('borders', e.target.value, 'all'));
 $('#selTblWrap').addEventListener('change', e => setTableAttr('wrap', e.target.value, ''));
+$('#pShadeColor').addEventListener('input', e => { $('#pShadeSwatch').style.background = e.target.value; });
+$('#pShadeColor').addEventListener('change', e => applyShade(e.target.value));
 $('#shadeColor').addEventListener('input', e => { $('#shadeSwatch').style.background = e.target.value; });
 $('#shadeColor').addEventListener('change', () => tableOp('shade'));
 $$('[data-img]').forEach(b => b.addEventListener('click', () => imageOp(b.dataset.img)));
@@ -2619,6 +2623,231 @@ async function autoCorrectDialog() {
   settings.ac = res.ac; settings.acCustom = res.custom.sort((x, y) => y[0].length - x[0].length); saveSettings(); toast('AutoCorrect saved');
 }
 
+/* ============================================================ clipboard, font size, case, sort, marks */
+function clip(cmd) { restoreSel(); const r = selRange(); if (!r || r.collapsed) { toast('Select some text first'); return; } try { if (!document.execCommand(cmd)) throw 0; } catch { toast(`Press ${isMac ? '⌘' : 'Ctrl'}+${cmd === 'cut' ? 'X' : 'C'}`); } }
+function stepFont(dir) {
+  restoreSel(); const n = selNode(); if (!n) return;
+  const pt = Math.round(parseFloat(getComputedStyle(n.nodeType === 1 ? n : n.parentElement).fontSize) * 0.75 * 2) / 2;
+  const next = dir > 0 ? (SIZES.find(s => s > pt) || pt + 12) : ([...SIZES].reverse().find(s => s < pt) || Math.max(1, pt - 1));
+  applyFontSize(next);
+}
+function textNodesIn(r) {
+  const out = []; const root = r.commonAncestorContainer.nodeType === 1 ? r.commonAncestorContainer : r.commonAncestorContainer.parentNode;
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); let n;
+  while ((n = w.nextNode())) {
+    if (!r.intersectsNode(n) || closestEl(n, '.pg-gap')) continue;
+    const s = n === r.startContainer ? r.startOffset : 0, e = n === r.endContainer ? r.endOffset : n.length;
+    if (e > s) out.push({ n, s, e });
+  }
+  return out;
+}
+function changeCase(mode) {
+  restoreSel(); let r = selRange(); if (!r) return;
+  if (r.collapsed) { const sel = getSelection(); sel.modify('move', 'backward', 'word'); sel.modify('extend', 'forward', 'word'); r = selRange(); if (!r || r.collapsed) return; }
+  const parts = textNodesIn(r); if (!parts.length) return;
+  History.push('case', true);
+  const full = parts.map(p => p.n.data.slice(p.s, p.e)).join('');
+  const chars = [...full]; const lower = full.toLowerCase();
+  const out = chars.map((c, i) => {
+    const one = f => { const x = f(c); return x.length === c.length ? x : c; };
+    const prev = full.slice(0, i);
+    switch (mode) {
+      case 'upper': return one(x => x.toUpperCase());
+      case 'lower': return one(x => x.toLowerCase());
+      case 'title': return /(^|[\s \-–—(“"'‘/])$/.test(prev) ? one(x => x.toUpperCase()) : one(x => x.toLowerCase());
+      case 'sentence': { const st = /(^|[.!?]["'”’)]?[\s ]+)$/.test(prev) || !prev.trim(); return st && /\p{L}/u.test(c) && !/\p{L}/u.test(lower.slice(0, i).trim().slice(-1) || '') ? one(x => x.toUpperCase()) : one(x => x.toLowerCase()); }
+      case 'toggle': return c === c.toUpperCase() ? one(x => x.toLowerCase()) : one(x => x.toUpperCase());
+    }
+    return c;
+  }).join('');
+  let k = 0;
+  for (const p of parts) { const len = p.e - p.s; p.n.replaceData(p.s, len, out.slice(k, k + len)); k += len; }
+  const nr = document.createRange(); nr.setStart(parts[0].n, parts[0].s); const last = parts[parts.length - 1]; nr.setEnd(last.n, last.e); setRange(nr);
+  markChanged();
+}
+async function sortDialog() {
+  restoreSel(); let blocks = getSelectedBlocks();
+  if (blocks.length < 2) { const li = closestEl(selNode(), 'li'); if (li) blocks = [...li.parentElement.children].filter(x => x.tagName === 'LI'); }
+  if (blocks.length < 2) { toast('Select two or more paragraphs or list items to sort'); return; }
+  const parent = blocks[0].parentElement;
+  if (blocks.some(b => b.parentElement !== parent)) { toast('Select paragraphs at the same level to sort'); return; }
+  const r = await promptDialog('Sort', [{ name: 'o', label: `Sort ${blocks.length} ${blocks[0].tagName === 'LI' ? 'list items' : 'paragraphs'}`, type: 'select', value: 'asc', options: [['asc', 'A → Z (ascending)'], ['desc', 'Z → A (descending)'], ['num', 'Numbers, smallest first'], ['numd', 'Numbers, largest first']] }], 'Sort');
+  if (!r) return;
+  History.push('sort', true); Pager.strip();
+  const key = b => b.textContent.trim(); const num = b => parseFloat(key(b).replace(/[^\d.\-]/g, '')) || 0;
+  const coll = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+  const sorted = [...blocks].sort((a, b) => r.o === 'asc' ? coll.compare(key(a), key(b)) : r.o === 'desc' ? coll.compare(key(b), key(a)) : r.o === 'num' ? num(a) - num(b) : num(b) - num(a));
+  const anchor = document.createComment('sort'); blocks[0].before(anchor);
+  sorted.forEach(b => anchor.before(b)); anchor.remove();
+  markChanged(); Pager.schedule(30);
+}
+function toggleMarks() { settings.marks = !settings.marks; saveSettings(); editor.classList.toggle('show-marks', settings.marks); $('#btnMarks').classList.toggle('on', settings.marks); Pager.schedule(30); }
+function setListStyle(kind, val) {
+  restoreSel(); let li = closestEl(selNode(), 'li');
+  const want = kind === 'ul' ? 'UL' : 'OL';
+  if (!li || li.parentElement.tagName !== want) { toggleList(want); li = closestEl(selNode(), 'li'); }
+  if (!li) return;
+  History.push('list', true);
+  const list = li.parentElement;
+  if (kind === 'ul') { if (val === 'disc') list.removeAttribute('data-bullet'); else list.dataset.bullet = val; }
+  else {
+    list.removeAttribute('data-legal'); list.removeAttribute('type');
+    if (val === 'legal') list.setAttribute('data-legal', ''); else if (val !== '1') list.setAttribute('type', val);
+  }
+  markChanged();
+}
+
+/* ============================================================ shading & borders */
+const BSTYLE = () => Object.assign({ w: 1, style: 'solid', color: '#1c2230' }, settings.border || {});
+const bcss = () => { const b = BSTYLE(); return `${b.style === 'double' ? Math.max(3, b.w * 3) : b.w}px ${b.style} ${b.color}`; };
+function applyShade(color) {
+  restoreSel();
+  const cells = closestEl(selNode(), 'td, th') ? selectedCells() : [];
+  History.push('shade', true);
+  if (cells.length) cells.forEach(c => { c.style.backgroundColor = color || ''; });
+  else getSelectedBlocks().forEach(b => { b.style.backgroundColor = color || ''; if (color) b.style.padding = b.style.padding || '1pt 4pt'; else if (!b.style.borderTop && !b.style.borderBottom && !b.style.borderLeft) b.style.padding = ''; if (!b.getAttribute('style')) b.removeAttribute('style'); });
+  markChanged(); Pager.schedule(30);
+}
+function cellBorders(kind) {
+  const tbl = closestEl(selNode(), 'table'); if (!tbl) return false;
+  const cells = selectedCells(); if (!cells.length) return false;
+  Pager.strip();
+  const { grid, pos } = tableGrid(tbl);
+  let r0 = Infinity, r1 = -1, c0 = Infinity, c1 = -1;
+  cells.forEach(c => { const p = pos.get(c); r0 = Math.min(r0, p.r); c0 = Math.min(c0, p.c); r1 = Math.max(r1, p.r + c.rowSpan - 1); c1 = Math.max(c1, p.c + c.colSpan - 1); });
+  const line = bcss(), none = '1px hidden transparent';
+  const side = { top: 'borderTop', bottom: 'borderBottom', left: 'borderLeft', right: 'borderRight' };
+  const opp = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
+  const set = (r, c, s, v) => {                       // set one edge on the cell at (r,c) and the neighbour that shares it
+    const cell = grid[r]?.[c]; if (!cell) return; cell.style[side[s]] = v;
+    const nr = s === 'top' ? r - 1 : s === 'bottom' ? r + 1 : r, nc = s === 'left' ? c - 1 : s === 'right' ? c + 1 : c;
+    const nb = grid[nr]?.[nc]; if (nb && nb !== cell) nb.style[side[opp[s]]] = v;
+  };
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    const edges = { top: r === r0, bottom: r === r1, left: c === c0, right: c === c1 };
+    const apply = (s, on) => set(r, c, s, on);
+    switch (kind) {
+      case 'all': ['top', 'bottom', 'left', 'right'].forEach(s => apply(s, line)); break;
+      case 'none': ['top', 'bottom', 'left', 'right'].forEach(s => apply(s, none)); break;
+      case 'outside': ['top', 'bottom', 'left', 'right'].forEach(s => { if (edges[s]) apply(s, line); }); break;
+      case 'inside': ['top', 'bottom', 'left', 'right'].forEach(s => { if (!edges[s]) apply(s, line); }); break;
+      case 'insideH': if (!edges.bottom) apply('bottom', line); break;
+      case 'insideV': if (!edges.right) apply('right', line); break;
+      case 'top': case 'bottom': case 'left': case 'right': if (edges[kind]) apply(kind, line); break;
+    }
+  }
+  return true;
+}
+function paraBorders(kind) {
+  const line = bcss(); const blocks = getSelectedBlocks(); if (!blocks.length) return;
+  blocks.forEach((b, i) => {
+    const first = i === 0, last = i === blocks.length - 1;
+    const set = (s, v) => { b.style['border' + s] = v; };
+    if (kind === 'none') { ['Top', 'Bottom', 'Left', 'Right'].forEach(s => set(s, '')); b.style.padding = b.style.backgroundColor ? '1pt 4pt' : ''; }
+    else {
+      if (kind === 'all' || kind === 'outside') { if (first) set('Top', line); if (last) set('Bottom', line); set('Left', line); set('Right', line); if (kind === 'all' && !last) set('Bottom', line); }
+      else if (kind === 'inside' || kind === 'insideH') { if (!last) set('Bottom', line); }
+      else if (kind === 'top') set('Top', line); else if (kind === 'bottom') set('Bottom', line);
+      else if (kind === 'left') set('Left', line); else if (kind === 'right') set('Right', line);
+      b.style.padding = '2pt 4pt';
+    }
+    if (!b.getAttribute('style')) b.removeAttribute('style');
+  });
+}
+function applyBorders(kind) {
+  restoreSel(); History.push('borders', true);
+  if (closestEl(selNode(), 'td, th')) cellBorders(kind); else paraBorders(kind);
+  markChanged(); Pager.schedule(30);
+}
+function bordersMenu(anchor) {
+  const ic = d => `<svg viewBox="0 0 20 20"><rect x="2" y="2" width="16" height="16" fill="none" stroke="#aab1bd" stroke-dasharray="1.5 1.5"/>${d}</svg>`;
+  const L = (x1, y1, x2, y2) => `<path d="M${x1} ${y1}L${x2} ${y2}" stroke="currentColor" stroke-width="2"/>`;
+  const opts = [['bottom', 'Bottom border', L(2, 18, 18, 18)], ['top', 'Top border', L(2, 2, 18, 2)], ['left', 'Left border', L(2, 2, 2, 18)], ['right', 'Right border', L(18, 2, 18, 18)],
+    ['none', 'No border', ''], ['all', 'All borders', L(2, 2, 18, 2) + L(2, 18, 18, 18) + L(2, 2, 2, 18) + L(18, 2, 18, 18) + L(10, 2, 10, 18) + L(2, 10, 18, 10)],
+    ['outside', 'Outside borders', L(2, 2, 18, 2) + L(2, 18, 18, 18) + L(2, 2, 2, 18) + L(18, 2, 18, 18)], ['inside', 'Inside borders', L(10, 2, 10, 18) + L(2, 10, 18, 10)],
+    ['insideH', 'Inside horizontal', L(2, 10, 18, 10)], ['insideV', 'Inside vertical', L(10, 2, 10, 18)]];
+  const wrap = document.createElement('div');
+  const b = BSTYLE();
+  wrap.innerHTML = `<div class="label">${closestEl(selNode(), 'td, th') ? 'Borders for selected cells' : 'Borders for selected paragraphs'}</div>
+    <div class="border-pick">${opts.map(([k, t, d]) => `<button data-b="${k}" title="${t}">${ic(d)}</button>`).join('')}</div>
+    <div class="border-opts"><select id="bW" title="Line weight">${[[1, '½ pt'], [1.5, '1 pt'], [2, '1½ pt'], [3, '2¼ pt'], [4, '3 pt']].map(([v, l]) => `<option value="${v}" ${+v === +b.w ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <select id="bS" title="Line style">${[['solid', 'Solid'], ['double', 'Double'], ['dashed', 'Dashed'], ['dotted', 'Dotted']].map(([v, l]) => `<option value="${v}" ${v === b.style ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <input type="color" id="bC" value="${b.color}" title="Line colour"></div>`;
+  const save = () => { settings.border = { w: +$('#bW', wrap).value, style: $('#bS', wrap).value, color: $('#bC', wrap).value }; saveSettings(); };
+  wrap.addEventListener('change', save);
+  wrap.addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
+  wrap.addEventListener('click', e => { const bt = e.target.closest('[data-b]'); if (!bt) return; save(); hideMenu(); applyBorders(bt.dataset.b); });
+  showMenu(anchor, [{ node: wrap }]);
+}
+
+/* ============================================================ views: web, read mode, multiple pages */
+function setView(v) {
+  settings.pageView = v; saveSettings();
+  $('#vPrint').classList.toggle('on', v === 'pages'); $('#vWeb').classList.toggle('on', v === 'web');
+  $('#btnPages').classList.toggle('on', v === 'pages'); $('#btnWeb').classList.toggle('on', v === 'web');
+  applyPage();
+}
+window.addEventListener('resize', () => { if (settings.pageView === 'web') { clearTimeout(setView.t); setView.t = setTimeout(applyPage, 150); } });
+function readMode() {
+  if (!cur) return; if (pendingSave) saveNow();
+  const c = finalClone(); $$('[contenteditable]', c).forEach(x => x.removeAttribute('contenteditable')); $$('[id]', c).forEach(x => { if (!/^h-/.test(x.id)) x.removeAttribute('id'); });
+  const rd = $('#reader');
+  rd.innerHTML = `<div class="reader-bar"><span class="t">${esc(cur.title)}</span>
+    <button class="btn small outline" data-r="font">Aa</button><button class="btn small outline" data-r="smaller">A−</button><button class="btn small outline" data-r="bigger">A+</button>
+    <button class="btn small primary" data-r="close"><i data-lucide="x"></i>Close</button></div><div class="reader-body${settings.readSans ? ' sans' : ''}" style="font-size:${settings.readSize || 13.5}pt"></div>`;
+  $('.reader-body', rd).appendChild(c); c.removeAttribute('id'); c.className = '';
+  rd.classList.add('show'); icons(); rd.scrollTop = 0; rd.focus();
+  rd.onclick = e => {
+    const b = e.target.closest('[data-r]'); if (!b) return; const body = $('.reader-body', rd);
+    if (b.dataset.r === 'close') { rd.classList.remove('show'); rd.innerHTML = ''; return; }
+    if (b.dataset.r === 'font') { settings.readSans = !settings.readSans; body.classList.toggle('sans', settings.readSans); }
+    else { settings.readSize = clamp((settings.readSize || 13.5) + (b.dataset.r === 'bigger' ? 1 : -1), 10, 24); body.style.fontSize = settings.readSize + 'pt'; }
+    saveSettings();
+  };
+}
+function multiPages(perRow) {
+  if (!cur) return;
+  if (settings.pageView !== 'pages') setView('pages');
+  Pager.run();
+  const mv = $('#multi'); const g = Pager.geo; const n = $$('#sheets .sheet').length; const { w } = pageDims(); const W = w * 96;
+  const cr = canvas.getBoundingClientRect(); Object.assign(mv.style, { left: cr.left + 'px', top: cr.top + 'px', width: cr.width + 'px', height: cr.height + 'px' });
+  perRow = perRow || settings.multiPer || 2; settings.multiPer = perRow; saveSettings();
+  const s = Math.min(1, (cr.width - 44 - (perRow - 1) * 22) / (perRow * W));
+  const max = Math.min(n, 60);
+  const proto = page.cloneNode(true);
+  const ec = proto.querySelector('[contenteditable="true"]');
+  $$('[id]', proto).forEach(x => x.removeAttribute('id')); $$('[contenteditable]', proto).forEach(x => x.removeAttribute('contenteditable'));
+  if (ec) ec.id = 'editor';          // keep the document styles (they are scoped to #editor)
+  $$('.ruler-v, .hf-field, .page-header, .page-footer', proto).forEach(x => x.remove());
+  proto.querySelector('.overlays')?.querySelectorAll('.ov-hf.p0').forEach(x => x.style.visibility = 'visible');
+  mv.innerHTML = `<div class="multi-bar"><b>${n} page${n > 1 ? 's' : ''}</b><span class="hint">click a page to edit it</span><div class="spacer"></div>
+    ${[1, 2, 3, 4].map(k => `<button class="btn small ${k === perRow ? 'on' : 'outline'}" data-per="${k}">${k} per row</button>`).join('')}
+    <button class="btn small primary" data-close><i data-lucide="x"></i>Close</button></div><div class="multi-grid"></div>`;
+  const grid = $('.multi-grid', mv);
+  for (let k = 0; k < max; k++) {
+    const box = document.createElement('div'); box.className = 'mp'; box.dataset.k = k;
+    box.style.width = W * s + 'px'; box.style.height = g.H * s + 'px';
+    const inner = document.createElement('div'); inner.className = 'inner';
+    inner.style.transform = `scale(${s}) translateY(${-k * (g.H + g.G)}px)`;
+    const c = proto.cloneNode(true); c.style.margin = '0'; c.classList.add('page'); c.removeAttribute('id');
+    c.querySelectorAll('.sheet').forEach(x => { x.style.boxShadow = 'none'; });
+    inner.appendChild(c); box.appendChild(inner);
+    const num = document.createElement('span'); num.className = 'mp-num'; num.textContent = k + 1; box.appendChild(num);
+    grid.appendChild(box);
+  }
+  if (n > max) grid.insertAdjacentHTML('beforeend', `<div class="hint" style="width:100%;text-align:center">Showing the first ${max} of ${n} pages</div>`);
+  mv.classList.add('show'); icons();
+  $('#vMulti').classList.add('on');
+  mv.onclick = e => {
+    const per = e.target.closest('[data-per]'); if (per) { multiPages(+per.dataset.per); return; }
+    const close = () => { mv.classList.remove('show'); mv.innerHTML = ''; $('#vMulti').classList.remove('on'); };
+    if (e.target.closest('[data-close]')) { close(); return; }
+    const box = e.target.closest('.mp'); if (!box) return;
+    close(); canvas.scrollTop = (+box.dataset.k) * (g.H + g.G) * (settings.zoom / 100);
+  };
+}
+window.addEventListener('resize', () => { if ($('#multi').classList.contains('show')) multiPages(); });
+
 /* ================================================================ actions */
 const act = {
   fileMenu(el) {
@@ -2693,6 +2922,20 @@ const act = {
   toc: () => { insertHTMLAtCaret('<div class="toc" contenteditable="false"></div><p><br></p>'); updateTOCs(true); markChanged(); },
   tocUpdate: () => { if (!editor.querySelector('.toc')) { toast('Insert a table of contents first (Insert → Contents)'); return; } History.push('toc', true); updateTOCs(false); },
   comment: addComment,
+  cut: () => clip('cut'), copy: () => clip('copy'), paste: () => pasteFromClipboard(false),
+  pasteMenu(el) { showMenu(el, [{ icon: 'clipboard', label: 'Keep source formatting', act: () => pasteFromClipboard(false) }, { icon: 'type', label: 'Keep text only', act: () => pasteFromClipboard(true) }]); },
+  growFont: () => stepFont(1), shrinkFont: () => stepFont(-1),
+  caseMenu(el) { showMenu(el, [['sentence', 'Sentence case.'], ['lower', 'lowercase'], ['upper', 'UPPERCASE'], ['title', 'Capitalize Each Word'], ['toggle', 'tOGGLE cASE']].map(([k, l]) => ({ label: l, act: () => changeCase(k) }))); },
+  bulletMenu(el) { showMenu(el, [['disc', '●  Filled circle'], ['circle', '○  Hollow circle'], ['square', '■  Square'], ['check', '✓  Tick'], ['arrow', '➤  Arrow'], ['dash', '–  Dash']].map(([k, l]) => ({ label: l, act: () => setListStyle('ul', k) }))); },
+  numberMenu(el) { showMenu(el, [['1', '1. 2. 3.'], ['a', 'a. b. c.'], ['A', 'A. B. C.'], ['i', 'i. ii. iii.'], ['I', 'I. II. III.'], ['legal', '1.  1.1  1.1.1  (multilevel)']].map(([k, l]) => ({ label: l, act: () => setListStyle('ol', k) }))); },
+  sort: () => sortDialog(), toggleMarks: () => toggleMarks(),
+  applyShade: () => applyShade($('#pShadeColor').value),
+  bordersMenu: el => bordersMenu(el),
+  selectMenu(el) { showMenu(el, [{ icon: 'text-select', label: 'Select all', kbd: (isMac ? '⌘' : 'Ctrl+') + 'A', act: () => { editor.focus(); document.execCommand('selectAll'); } },
+    { icon: 'pilcrow', label: 'Select current paragraph', act: () => { restoreSel(); const b = closestEl(selNode(), 'li') || blockOf(selNode()); if (b) { const r = document.createRange(); r.selectNodeContents(b); setRange(r); } } },
+    { icon: 'table', label: 'Select current table', act: () => { restoreSel(); const t = closestEl(selNode(), 'table'); if (t) { const r = document.createRange(); r.selectNode(t); setRange(r); } else toast('The cursor is not in a table'); } }]); },
+  viewPrint: () => setView('pages'), viewWeb: () => setView(settings.pageView === 'web' ? 'pages' : 'web'),
+  readMode: () => readMode(), multiPages: () => $('#multi').classList.contains('show') ? $('#multi [data-close]').click() : multiPages(),
   painter: () => {},
   paragraph: () => paragraphDialog(),
   stylesDialog: () => stylesDialog(),
@@ -2780,6 +3023,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if ($('#overlay').classList.contains('show')) { closeModal(null); return; }
     if (Painter.fmt) { Painter.off(); return; }
+    if ($('#reader').classList.contains('show')) { $('#reader [data-r="close"]').click(); return; }
+    if ($('#multi').classList.contains('show')) { $('#multi [data-close]').click(); return; }
     if (menuEl.classList.contains('show')) { hideMenu(); return; }
     if (document.body.classList.contains('focus')) { document.body.classList.remove('focus'); return; }
     if (panelMode) { closePanel(); return; }
@@ -2794,6 +3039,7 @@ document.addEventListener('keydown', e => {
     '\\': () => clearFormat()
   };
   if (!e.altKey && map[k] && !(k === 'h' && e.shiftKey)) { e.preventDefault(); map[k](); return; }
+  if (!e.altKey && (e.key === ']' || e.key === '[' || (e.shiftKey && (e.key === '>' || e.key === '<')))) { e.preventDefault(); stepFont(e.key === ']' || e.key === '>' ? 1 : -1); return; }
   if (e.shiftKey && !e.altKey) {
     const sm = { 7: () => toggleList('OL'), 8: () => toggleList('UL'), 9: toggleChecklist,
       l: () => exec('justifyLeft'), e: () => (inEd || !cur ? exec('justifyCenter') : 0), r: () => exec('justifyRight'), j: () => exec('justifyFull'),
@@ -3126,6 +3372,10 @@ async function buildDocx(d, root) {
     const ml = lenToTwip(s.marginLeft), ti = lenToTwip(s.textIndent);
     const mr = lenToTwip(s.marginRight);
     if (ml || ti || mr) o.indent = { ...(o.indent || {}), ...(ml ? { left: ml } : {}), ...(mr ? { right: mr } : {}), ...(ti > 0 ? { firstLine: ti } : ti < 0 ? { hanging: -ti } : {}) };
+    const pb = cssBorder => { if (!cssBorder || /none|hidden/.test(cssBorder)) return undefined; return wordBorder(cssBorder); };
+    const bd = { top: pb(s.borderTop), bottom: pb(s.borderBottom), left: pb(s.borderLeft), right: pb(s.borderRight) };
+    if (bd.top || bd.bottom || bd.left || bd.right) o.border = Object.fromEntries(Object.entries(bd).filter(([, v]) => v).map(([k, v]) => [k, { ...v, space: 4 }]));
+    if (s.backgroundColor && toHex(s.backgroundColor) && !o.shading) o.shading = { type: D.ShadingType.CLEAR, fill: toHex(s.backgroundColor), color: 'auto' };
     if (s.marginTop || s.marginBottom) o.spacing = { ...(o.spacing || {}), ...(s.marginTop ? { before: lenToTwip(s.marginTop) } : {}), ...(s.marginBottom ? { after: lenToTwip(s.marginBottom) } : {}) };
     return o;
   }
@@ -3145,6 +3395,8 @@ async function buildDocx(d, root) {
   function list(el, level, out) {
     const ordered = el.tagName === 'OL'; const check = el.classList.contains('checklist');
     const inst = ordered ? ++st.olInstance : 0;
+    const olRef = el.hasAttribute('data-legal') ? 'ol-legal' : ({ a: 'ol-a', A: 'ol-A', i: 'ol-i', I: 'ol-I' }[el.getAttribute('type')] || 'ol');
+    const bulRef = { circle: 'bul-circle', square: 'bul-square', check: 'bul-check', arrow: 'bul-arrow', dash: 'bul-dash' }[el.dataset.bullet];
     for (const li of el.children) {
       if (isList(li)) { list(li, level + 1, out); continue; }
       if (li.tagName !== 'LI') continue;
@@ -3158,10 +3410,16 @@ async function buildDocx(d, root) {
         if (c.nodeType === 1 && /^(P|DIV)$/.test(c.tagName)) { if (!first) kids.push(new D.TextRun({ break: 1 })); inlines(c, fmtFrom(c, {}), kids); first = false; continue; }
         const tmp = document.createElement('span'); tmp.appendChild(c.cloneNode(true)); inlines(tmp, {}, kids); first = false;
       }
-      const o = paraOpts(li, ordered ? { numbering: { reference: 'ol', level: Math.min(level, 5), instance: inst } } : check ? { indent: { left: 720 * (level + 1), hanging: 360 } } : { bullet: { level: Math.min(level, 5) } });
+      const o = paraOpts(li, ordered ? { numbering: { reference: olRef, level: Math.min(level, 5), instance: inst } } : check ? { indent: { left: 720 * (level + 1), hanging: 360 } } : bulRef ? { numbering: { reference: bulRef, level: Math.min(level, 5) } } : { bullet: { level: Math.min(level, 5) } });
       out.push(new D.Paragraph({ ...o, children: kids }));
       nested.forEach(n => list(n, level + 1, out));
     }
+  }
+  function wordBorder(css) {
+    const el = document.createElement('div'); el.style.borderTop = css; const st = el.style.borderTopStyle, w = parseFloat(el.style.borderTopWidth) || 1, c = toHex(el.style.borderTopColor) || '000000';
+    if (st === 'hidden' || st === 'none') return { style: D.BorderStyle.NONE, size: 0, color: 'FFFFFF' };
+    const map = { solid: D.BorderStyle.SINGLE, double: D.BorderStyle.DOUBLE, dashed: D.BorderStyle.DASHED, dotted: D.BorderStyle.DOTTED };
+    return { style: map[st] || D.BorderStyle.SINGLE, size: Math.max(2, Math.round((st === 'double' ? w / 3 : w) * 0.75 * 8)), color: c };
   }
   function table(tbl) {
     const ts = tbl.dataset.ts || 'grid', bd = tbl.dataset.borders || (ts === 'minimal' ? 'horiz' : 'all');
@@ -3200,7 +3458,11 @@ async function buildDocx(d, root) {
             shading: fill ? { fill, type: D.ShadingType.CLEAR, color: 'auto' } : undefined,
             verticalAlign: va === 'middle' ? D.VerticalAlign.CENTER : va === 'bottom' ? D.VerticalAlign.BOTTOM : undefined,
             width: w ? { size: Math.round(w * 50), type: D.WidthType.PERCENTAGE } : undefined,
-            borders: th && ts === 'minimal' ? { bottom: { style: L, size: 12, color: '1C2230' } } : undefined,
+            borders: (() => {
+              const own = {}; for (const [k, cssK] of [['top', 'borderTop'], ['bottom', 'borderBottom'], ['left', 'borderLeft'], ['right', 'borderRight']]) if (td.style[cssK]) own[k] = wordBorder(td.style[cssK]);
+              if (th && ts === 'minimal' && !own.bottom) own.bottom = { style: L, size: 12, color: '1C2230' };
+              return Object.keys(own).length ? own : undefined;
+            })(),
             margins: { top: 60, bottom: 60, left: 100, right: 100 }
           });
         })
@@ -3289,7 +3551,15 @@ async function buildDocx(d, root) {
         ]
       };
     })(),
-    numbering: { config: [{ reference: 'ol', levels: [0, 1, 2, 3, 4, 5].map(i => ({ level: i, format: [D.LevelFormat.DECIMAL, D.LevelFormat.LOWER_LETTER, D.LevelFormat.LOWER_ROMAN][i % 3], text: `%${i + 1}.`, alignment: D.AlignmentType.START, style: { paragraph: { indent: { left: 720 * (i + 1), hanging: 360 } } } })) }] },
+    numbering: { config: (() => {
+      const F = D.LevelFormat; const ind = i => ({ paragraph: { indent: { left: 720 * (i + 1), hanging: 360 } } });
+      const seq = [F.DECIMAL, F.LOWER_LETTER, F.LOWER_ROMAN];
+      const ol = (ref, first) => ({ reference: ref, levels: [0, 1, 2, 3, 4, 5].map(i => ({ level: i, format: i === 0 ? first : seq[i % 3], text: `%${i + 1}.`, alignment: D.AlignmentType.START, style: ind(i) })) });
+      const bul = (ref, ch) => ({ reference: ref, levels: [0, 1, 2, 3, 4, 5].map(i => ({ level: i, format: F.BULLET, text: ch, alignment: D.AlignmentType.START, style: ind(i) })) });
+      return [ol('ol', F.DECIMAL), ol('ol-a', F.LOWER_LETTER), ol('ol-A', F.UPPER_LETTER), ol('ol-i', F.LOWER_ROMAN), ol('ol-I', F.UPPER_ROMAN),
+        { reference: 'ol-legal', levels: [0, 1, 2, 3, 4, 5].map(i => ({ level: i, format: F.DECIMAL, text: Array.from({ length: i + 1 }, (_, j) => `%${j + 1}`).join('.') + (i ? '' : '.'), alignment: D.AlignmentType.START, style: { paragraph: { indent: { left: 720 * (i + 1) + 180 * i, hanging: 360 + 180 * i } } } })) },
+        bul('bul-circle', '○'), bul('bul-square', '■'), bul('bul-check', '✓'), bul('bul-arrow', '➤'), bul('bul-dash', '–')];
+    })() },
     footnotes: st.footnotes,
     sections: secs.map((sec, i) => ({
       properties: {
@@ -3616,7 +3886,8 @@ if (bc) bc.onmessage = async ({ data }) => {
 /* ================================================================== boot */
 async function boot() {
   icons(); buildSelects(); setTheme(settings.theme); applySpell();
-  $('#btnPages').classList.toggle('on', settings.pageView !== 'continuous');
+  $('#btnPages').classList.toggle('on', Pager.on()); $('#vPrint').classList.toggle('on', Pager.on()); $('#vWeb').classList.toggle('on', settings.pageView === 'web'); $('#btnWeb').classList.toggle('on', settings.pageView === 'web');
+  editor.classList.toggle('show-marks', !!settings.marks); $('#btnMarks').classList.toggle('on', !!settings.marks);
   try { document.execCommand('styleWithCSS', false, true); document.execCommand('defaultParagraphSeparator', false, 'p'); } catch {}
   try { await DB.open(); } catch (e) {
     modal({ title: 'Storage unavailable', body: '<p>This browser blocked local storage (private mode?). Lekh needs it to save documents.</p>', buttons: [{ label: 'OK', primary: true }] });

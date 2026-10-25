@@ -259,6 +259,46 @@ svg.lucide { width: 18px; height: 18px; stroke-width: 1.9; flex: none; }
 #editor table[data-borders="horiz"] :is(td, th) { border-left: 1px dashed #e3e6ec; border-right: 1px dashed #e3e6ec; }
 #editor table.multi-sel ::selection { background: transparent; }
 #editor .cell-sel { box-shadow: inset 0 0 0 9999px rgba(36, 87, 166, .16); }
+body.web-view .ov-hf, body.web-view .page-header, body.web-view .page-footer, body.web-view .ruler-h, body.web-view .ruler-v { display: none !important; }
+body.web-view .sheet { box-shadow: none; }
+/* formatting marks */
+#editor.show-marks :is(p, h1, h2, h3, h4, li, blockquote, pre)::after { content: "¶"; color: #7aa7f0; font: 400 0.9em Calibri, Carlito, sans-serif; font-style: normal; margin-left: 2px; }
+#editor.show-marks :is(td, th)::after { content: "¤"; color: #7aa7f0; font-size: .85em; }
+#editor.show-marks span[style*="white-space"] { background: linear-gradient(transparent 45%, #b8cdf5 45%, #b8cdf5 55%, transparent 55%); }
+#editor.show-marks li > :is(p, ul, ol)::after { content: none; }
+/* bullet styles */
+#editor ul[data-bullet="circle"] { list-style-type: circle; } #editor ul[data-bullet="square"] { list-style-type: square; }
+#editor ul[data-bullet="check"] { list-style-type: "✓  "; } #editor ul[data-bullet="arrow"] { list-style-type: "➤  "; } #editor ul[data-bullet="dash"] { list-style-type: "–  "; }
+#editor ol[data-legal] { counter-reset: lg; list-style: none; } #editor ol[data-legal] > li { counter-increment: lg; }
+#editor ol[data-legal] > li::before { content: counters(lg, ".") ". "; margin-left: -26pt; display: inline-block; min-width: 26pt; }
+#editor ol[data-legal] ol { counter-reset: lg; list-style: none; } #editor ol[data-legal] ol > li { counter-increment: lg; } #editor ol[data-legal] ol > li::before { content: counters(lg, ".") " "; margin-left: -32pt; display: inline-block; min-width: 32pt; }
+/* read mode & multiple pages */
+.reader { position: fixed; inset: 0; z-index: 150; background: #f7f3ea; color: #23201a; overflow-y: auto; display: none; }
+:root[data-theme="dark"] .reader { background: #1b1a17; color: #e8e2d4; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .reader { background: #1b1a17; color: #e8e2d4; } }
+.reader.show { display: block; }
+.reader-bar { position: sticky; top: 0; display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: inherit; border-bottom: 1px solid rgba(0,0,0,.08); z-index: 2; }
+.reader-bar .t { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reader-body { max-width: 720px; margin: 0 auto; padding: 40px 24px 120px; font: 13.5pt/1.75 Georgia, "Noto Serif Devanagari", serif; }
+.reader-body.sans { font-family: Calibri, Carlito, "Segoe UI", sans-serif; }
+.reader-body img { max-width: 100%; height: auto; } .reader-body table { border-collapse: collapse; width: 100%; } .reader-body td, .reader-body th { border: 1px solid rgba(0,0,0,.2); padding: 4px 8px; }
+.reader-body h1, .reader-body h2, .reader-body h3 { line-height: 1.3; } .reader-body .page-break { border-top: 1px dashed rgba(0,0,0,.2); margin: 28px 0; }
+.reader-body .title { font-size: 2em; margin: 0 0 .2em; } .reader-body .subtitle { opacity: .7; font-size: 1.15em; }
+.multi { position: absolute; inset: 0; z-index: 20; background: var(--bg); overflow: auto; display: none; }
+.multi.show { display: block; }
+.multi-bar { position: sticky; top: 0; z-index: 2; display: flex; gap: 6px; align-items: center; padding: 8px 14px; background: var(--chrome); border-bottom: 1px solid var(--line); }
+.multi-grid { display: flex; flex-wrap: wrap; gap: 22px; justify-content: center; padding: 22px; }
+.mp { position: relative; background: var(--paper); box-shadow: var(--shadow); overflow: hidden; cursor: pointer; flex: none; }
+.mp:hover { outline: 3px solid var(--accent); }
+.mp .inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
+.mp .inner .sheet { box-shadow: none; }
+.mp-num { position: absolute; bottom: 4px; right: 8px; font-size: 11px; color: #8a919d; }
+.border-pick { display: grid; grid-template-columns: repeat(5, 34px); gap: 4px; padding: 6px; }
+.border-pick button { width: 34px; height: 34px; padding: 0; justify-content: center; border: 1px solid var(--line); border-radius: 6px; }
+.border-pick svg { width: 20px; height: 20px; }
+.border-opts { display: flex; gap: 6px; align-items: center; padding: 4px 8px 8px; }
+.border-opts select { height: 28px; border: 1px solid var(--line); border-radius: 6px; background: var(--chrome-2); }
+.border-opts input[type=color] { width: 32px; height: 28px; padding: 1px; border: 1px solid var(--line); border-radius: 6px; }
 #editor.col-resize, body.dragging-col, body.dragging-col * { cursor: col-resize !important; }
 body.dragging-col #editor { user-select: none; }
 #editor .page-break {
@@ -380,7 +420,9 @@ body.painter #editor { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.
   color: var(--muted); font-size: 12.5px; min-height: 30px; white-space: nowrap; overflow-x: auto;
 }
 .statusbar .tc-on { color: var(--ins); font-weight: 600; }
-.zoom { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.views { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.views .icon-btn { width: 28px; min-height: 26px; } .views .btn.small { min-height: 26px; }
+.zoom { display: flex; align-items: center; gap: 6px; }
 .zoom input[type=range] { width: 110px; accent-color: var(--accent); }
 .zoom .icon-btn { width: 24px; min-height: 24px; }
 
@@ -494,7 +536,9 @@ body.focus .exit-focus { display: inline-flex; }
   #editor .cmt { background: none; border: 0; }
   #editor .cols { outline: 0; } #editor .cols.cols-flow::before { display: none; }
   #editor .mf { background: none; }
-  #editor table[data-borders="none"] :is(td, th), #editor table[data-borders="outer"] :is(td, th) { border-color: transparent !important; }
-  #editor table[data-borders="horiz"] :is(td, th) { border-left-color: transparent !important; border-right-color: transparent !important; }
+  #editor table[data-borders="none"] :is(td, th):not([style*="border"]), #editor table[data-borders="outer"] :is(td, th):not([style*="border"]) { border-color: transparent !important; }
+  #editor table[data-borders="horiz"] :is(td, th):not([style*="border"]) { border-left-color: transparent !important; border-right-color: transparent !important; }
+  #editor.show-marks :is(p, h1, h2, h3, h4, li, blockquote, pre, td, th)::after { content: none !important; }
   #editor ul.checklist li::before, .sheet { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+@media (max-width: 1700px) { .panel .hide-md { display: none; } }

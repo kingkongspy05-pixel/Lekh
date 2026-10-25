@@ -45,7 +45,12 @@
       <div class="group">
         <button class="icon-btn" data-act="undo" title="Undo (Ctrl+Z)"><i data-lucide="undo-2"></i></button>
         <button class="icon-btn" data-act="redo" title="Redo (Ctrl+Y)"><i data-lucide="redo-2"></i></button>
-        <button class="icon-btn" data-act="pastePlain" title="Paste as plain text (Ctrl+Shift+V)"><i data-lucide="clipboard-paste"></i></button>
+        <button class="icon-btn" data-act="cut" title="Cut (Ctrl+X)"><i data-lucide="scissors"></i></button>
+        <button class="icon-btn" data-act="copy" title="Copy (Ctrl+C)"><i data-lucide="copy"></i></button>
+        <span class="split">
+          <button class="icon-btn" data-act="paste" title="Paste (Ctrl+V)"><i data-lucide="clipboard"></i></button>
+          <button class="icon-btn caret" data-act="pasteMenu" title="Paste options"><i data-lucide="chevron-down"></i></button>
+        </span>
         <button class="icon-btn" id="btnPainter" data-act="painter" title="Format painter — click to copy formatting once, double-click to keep it on (Esc to stop)"><i data-lucide="paintbrush"></i></button>
       </div>
       <div class="group">
@@ -81,11 +86,20 @@
           <button class="icon-btn color-btn" data-act="applyBack" title="Highlight"><i data-lucide="highlighter"></i><span class="swatch" id="backSwatch" style="background:#ffeb3b"></span></button>
           <button class="icon-btn caret color-btn" title="Choose highlight colour"><i data-lucide="chevron-down"></i><input type="color" id="backColor" value="#ffeb3b"></button>
         </span>
+        <button class="icon-btn" data-act="growFont" title="Grow font (Ctrl+])"><i data-lucide="a-arrow-up"></i></button>
+        <button class="icon-btn" data-act="shrinkFont" title="Shrink font (Ctrl+[)"><i data-lucide="a-arrow-down"></i></button>
+        <button class="icon-btn" data-act="caseMenu" title="Change case"><i data-lucide="case-sensitive"></i></button>
         <button class="icon-btn" data-act="clearFormat" title="Clear formatting (Ctrl+\)"><i data-lucide="remove-formatting"></i></button>
       </div>
       <div class="group">
-        <button class="icon-btn" data-cmd="insertUnorderedList" title="Bullets (Ctrl+Shift+8)"><i data-lucide="list"></i></button>
-        <button class="icon-btn" data-cmd="insertOrderedList" title="Numbering (Ctrl+Shift+7)"><i data-lucide="list-ordered"></i></button>
+        <span class="split">
+          <button class="icon-btn" data-cmd="insertUnorderedList" title="Bullets (Ctrl+Shift+8)"><i data-lucide="list"></i></button>
+          <button class="icon-btn caret" data-act="bulletMenu" title="Bullet style"><i data-lucide="chevron-down"></i></button>
+        </span>
+        <span class="split">
+          <button class="icon-btn" data-cmd="insertOrderedList" title="Numbering (Ctrl+Shift+7)"><i data-lucide="list-ordered"></i></button>
+          <button class="icon-btn caret" data-act="numberMenu" title="Numbering style"><i data-lucide="chevron-down"></i></button>
+        </span>
         <button class="icon-btn" data-act="checklist" title="Checklist (Ctrl+Shift+9)"><i data-lucide="list-checks"></i></button>
         <button class="icon-btn" data-act="outdent" title="Decrease indent (Shift+Tab)"><i data-lucide="indent-decrease"></i></button>
         <button class="icon-btn" data-act="indent" title="Increase indent (Tab)"><i data-lucide="indent-increase"></i></button>
@@ -99,11 +113,19 @@
           <option value="">Line…</option><option value="1.2">1.0</option><option value="1.38">1.15</option>
           <option value="1.8">1.5</option><option value="2.4">2.0</option><option value="3">2.5</option><option value="3.6">3.0</option>
         </select>
-        <button class="icon-btn" data-act="paragraph" title="Paragraph spacing &amp; indents"><i data-lucide="pilcrow"></i></button>
+        <button class="icon-btn" data-act="sort" title="Sort A–Z"><i data-lucide="arrow-down-a-z"></i></button>
+        <button class="icon-btn" id="btnMarks" data-act="toggleMarks" title="Show paragraph marks (Ctrl+Shift+8 in Word)"><i data-lucide="pilcrow"></i></button>
+        <span class="split">
+          <button class="icon-btn color-btn" data-act="applyShade" title="Shading (paragraph or selected cells)"><i data-lucide="paint-bucket"></i><span class="swatch" id="pShadeSwatch" style="background:#fff3bf"></span></button>
+          <button class="icon-btn caret color-btn" title="Choose shading colour"><i data-lucide="chevron-down"></i><input type="color" id="pShadeColor" value="#fff3bf"></button>
+        </span>
+        <button class="btn" data-act="bordersMenu" title="Borders (paragraph or selected cells)"><svg class="lucide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="4" y="4" width="16" height="16" stroke-dasharray="2 2.4"/><path d="M4 20h16" stroke-width="2.6"/></svg><i data-lucide="chevron-down" style="width:12px;height:12px"></i></button>
+        <button class="icon-btn" data-act="paragraph" title="Paragraph settings (spacing, indents)"><i data-lucide="settings-2"></i></button>
       </div>
       <div class="group">
-        <button class="btn" data-act="find" title="Find (Ctrl+F)"><i data-lucide="search"></i><span class="hide-sm">Find</span></button>
-        <button class="btn" data-act="replace" title="Replace (Ctrl+H)"><i data-lucide="replace"></i><span class="hide-sm">Replace</span></button>
+        <button class="btn" data-act="find" title="Find (Ctrl+F)"><i data-lucide="search"></i><span class="hide-sm hide-md">Find</span></button>
+        <button class="btn" data-act="replace" title="Replace (Ctrl+H)"><i data-lucide="replace"></i><span class="hide-sm hide-md">Replace</span></button>
+        <button class="btn" data-act="selectMenu" title="Select"><i data-lucide="mouse-pointer-2"></i><span class="hide-sm hide-md">Select</span></button>
       </div>
     </div>
 
@@ -218,7 +240,10 @@
         <button class="btn" data-act="zoomFit">Fit width</button>
       </div>
       <div class="group">
-        <button class="btn" id="btnPages" data-act="togglePages"><i data-lucide="file-stack"></i>Page view</button>
+        <button class="btn" id="btnPages" data-act="viewPrint"><i data-lucide="file-text"></i>Print layout</button>
+        <button class="btn" id="btnWeb" data-act="viewWeb"><i data-lucide="globe"></i>Web layout</button>
+        <button class="btn" data-act="readMode"><i data-lucide="book-open"></i>Read mode</button>
+        <button class="btn" data-act="multiPages"><i data-lucide="layout-grid"></i>Multiple pages</button>
         <button class="btn" id="btnRuler" data-act="toggleRuler"><i data-lucide="ruler"></i>Ruler</button>
         <button class="btn" id="btnNav" data-act="toggleNav"><i data-lucide="list-tree"></i>Navigation</button>
         <button class="btn" data-act="focusMode"><i data-lucide="focus"></i>Focus mode</button>
@@ -366,6 +391,13 @@
   <span id="stWords">0 words</span>
   <span id="stTrack"></span>
   <span id="stSave" class="hide-sm"></span>
+  <div class="views">
+    <button class="btn small" data-act="focusMode" title="Focus mode"><i data-lucide="focus"></i><span class="hide-sm">Focus</span></button>
+    <button class="icon-btn" id="vRead" data-act="readMode" title="Read mode"><i data-lucide="book-open"></i></button>
+    <button class="icon-btn" id="vPrint" data-act="viewPrint" title="Print layout (pages)"><i data-lucide="file-text"></i></button>
+    <button class="icon-btn" id="vWeb" data-act="viewWeb" title="Web layout"><i data-lucide="globe"></i></button>
+    <button class="icon-btn" id="vMulti" data-act="multiPages" title="Multiple pages"><i data-lucide="layout-grid"></i></button>
+  </div>
   <div class="zoom">
     <button class="icon-btn" data-act="zoomOut" title="Zoom out"><i data-lucide="minus"></i></button>
     <input type="range" id="zoomRange" min="30" max="200" step="10" value="100" aria-label="Zoom">
@@ -377,6 +409,8 @@
 <button class="btn outline exit-focus" data-act="focusMode"><i data-lucide="x"></i>Exit focus</button>
 
 <div class="menu" id="menu"></div>
+<div class="reader" id="reader"></div>
+<div class="multi" id="multi" style="position:fixed"></div>
 <div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
 <div class="toast-wrap" id="toasts"></div>
 <input type="file" id="fileImage" accept="image/*" hidden>
