@@ -1,0 +1,13 @@
+{
+  "name": "Lekh — Documents",
+  "short_name": "Lekh",
+  "description": "A personal word processor that syncs through a private GitHub Gist.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#e9ecf1",
+  "theme_color": "#2457a6",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

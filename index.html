@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lekh — Documents</title>
+<meta name="description" content="A personal word processor that runs in your browser and syncs through a private GitHub Gist.">
+<meta name="theme-color" content="#2457a6">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Carlito:ital,wght@0,400;0,700;1,400;1,700&family=EB+Garamond:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;600;700&family=Lora:ital,wght@0,400;0,700;1,400&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&family=Noto+Sans+Devanagari:wght@400;700&family=Noto+Serif+Devanagari:wght@400;700&family=Roboto:ital,wght@0,400;0,700;1,400&family=Roboto+Mono&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============ TOP BAR ============ -->
+<header class="topbar">
+  <button class="icon-btn" id="btnSidebar" title="Documents (Ctrl+Shift+O)"><i data-lucide="panel-left"></i></button>
+  <div class="brand"><div class="brand-mark">L</div><span class="brand-name">Lekh</span></div>
+  <input class="title-input" id="docTitle" type="text" value="" placeholder="Untitled document" aria-label="Document title" spellcheck="false">
+  <div class="spacer"></div>
+  <span class="pill" id="syncPill" title="Sync status — click for sync settings"><i data-lucide="cloud-off"></i><span>Local only</span></span>
+  <button class="icon-btn" data-act="themeCycle" title="Theme"><i data-lucide="monitor"></i></button>
+  <button class="btn outline hide-sm" data-act="exportMenu"><i data-lucide="download"></i><span>Export</span></button>
+</header>
+
+<!-- ============ RIBBON ============ -->
+<nav class="ribbon">
+  <div class="tabs" role="tablist">
+    <button class="tab file" data-act="fileMenu">File</button>
+    <button class="tab active" data-tab="home">Home</button>
+    <button class="tab" data-tab="insert">Insert</button>
+    <button class="tab" data-tab="layout">Layout</button>
+    <button class="tab" data-tab="review">Review</button>
+    <button class="tab" data-tab="mailings">Mailings</button>
+    <button class="tab" data-tab="view">View</button>
+  </div>
+  <div class="panels">
+    <!-- HOME -->
+    <div class="panel active" data-panel="home">
+      <div class="group">
+        <button class="icon-btn" data-act="undo" title="Undo (Ctrl+Z)"><i data-lucide="undo-2"></i></button>
+        <button class="icon-btn" data-act="redo" title="Redo (Ctrl+Y)"><i data-lucide="redo-2"></i></button>
+        <button class="icon-btn" data-act="pastePlain" title="Paste as plain text (Ctrl+Shift+V)"><i data-lucide="clipboard-paste"></i></button>
+      </div>
+      <div class="group">
+        <select class="sel-style" id="selStyle" title="Paragraph style">
+          <option value="p">Normal</option>
+          <option value="title">Title</option>
+          <option value="subtitle">Subtitle</option>
+          <option value="h1">Heading 1</option>
+          <option value="h2">Heading 2</option>
+          <option value="h3">Heading 3</option>
+          <option value="h4">Heading 4</option>
+          <option value="blockquote">Quote</option>
+          <option value="pre">Code</option>
+        </select>
+      </div>
+      <div class="group">
+        <select class="sel-font" id="selFont" title="Font"></select>
+        <select class="sel-size" id="selSize" title="Font size (pt)"></select>
+      </div>
+      <div class="group">
+        <button class="icon-btn" data-cmd="bold" title="Bold (Ctrl+B)"><i data-lucide="bold"></i></button>
+        <button class="icon-btn" data-cmd="italic" title="Italic (Ctrl+I)"><i data-lucide="italic"></i></button>
+        <button class="icon-btn" data-cmd="underline" title="Underline (Ctrl+U)"><i data-lucide="underline"></i></button>
+        <button class="icon-btn" data-cmd="strikeThrough" title="Strikethrough"><i data-lucide="strikethrough"></i></button>
+        <button class="icon-btn" data-cmd="subscript" title="Subscript"><i data-lucide="subscript"></i></button>
+        <button class="icon-btn" data-cmd="superscript" title="Superscript"><i data-lucide="superscript"></i></button>
+        <span class="split">
+          <button class="icon-btn color-btn" data-act="applyFore" title="Text colour"><i data-lucide="baseline"></i><span class="swatch" id="foreSwatch" style="background:#c62828"></span></button>
+          <button class="icon-btn caret color-btn" title="Choose text colour"><i data-lucide="chevron-down"></i><input type="color" id="foreColor" value="#c62828"></button>
+        </span>
+        <span class="split">
+          <button class="icon-btn color-btn" data-act="applyBack" title="Highlight"><i data-lucide="highlighter"></i><span class="swatch" id="backSwatch" style="background:#ffeb3b"></span></button>
+          <button class="icon-btn caret color-btn" title="Choose highlight colour"><i data-lucide="chevron-down"></i><input type="color" id="backColor" value="#ffeb3b"></button>
+        </span>
+        <button class="icon-btn" data-act="clearFormat" title="Clear formatting (Ctrl+\)"><i data-lucide="remove-formatting"></i></button>
+      </div>
+      <div class="group">
+        <button class="icon-btn" data-cmd="insertUnorderedList" title="Bullets (Ctrl+Shift+8)"><i data-lucide="list"></i></button>
+        <button class="icon-btn" data-cmd="insertOrderedList" title="Numbering (Ctrl+Shift+7)"><i data-lucide="list-ordered"></i></button>
+        <button class="icon-btn" data-act="checklist" title="Checklist (Ctrl+Shift+9)"><i data-lucide="list-checks"></i></button>
+        <button class="icon-btn" data-act="outdent" title="Decrease indent (Shift+Tab)"><i data-lucide="indent-decrease"></i></button>
+        <button class="icon-btn" data-act="indent" title="Increase indent (Tab)"><i data-lucide="indent-increase"></i></button>
+      </div>
+      <div class="group">
+        <button class="icon-btn" data-cmd="justifyLeft" title="Align left (Ctrl+Shift+L)"><i data-lucide="align-left"></i></button>
+        <button class="icon-btn" data-cmd="justifyCenter" title="Centre (Ctrl+Shift+E)"><i data-lucide="align-center"></i></button>
+        <button class="icon-btn" data-cmd="justifyRight" title="Align right (Ctrl+Shift+R)"><i data-lucide="align-right"></i></button>
+        <button class="icon-btn" data-cmd="justifyFull" title="Justify (Ctrl+Shift+J)"><i data-lucide="align-justify"></i></button>
+        <select id="selLine" title="Line spacing" style="width:70px">
+          <option value="">Line…</option><option value="1.2">1.0</option><option value="1.38">1.15</option>
+          <option value="1.8">1.5</option><option value="2.4">2.0</option><option value="3">2.5</option><option value="3.6">3.0</option>
+        </select>
+      </div>
+      <div class="group">
+        <button class="btn" data-act="find" title="Find (Ctrl+F)"><i data-lucide="search"></i><span class="hide-sm">Find</span></button>
+        <button class="btn" data-act="replace" title="Replace (Ctrl+H)"><i data-lucide="replace"></i><span class="hide-sm">Replace</span></button>
+      </div>
+    </div>
+
+    <!-- INSERT -->
+    <div class="panel" data-panel="insert">
+      <div class="group">
+        <button class="btn" data-act="tableMenu"><i data-lucide="table"></i>Table</button>
+        <button class="btn" data-act="image"><i data-lucide="image"></i>Image</button>
+        <button class="btn" data-act="link" title="Ctrl+K"><i data-lucide="link"></i>Link</button>
+      </div>
+      <div class="group">
+        <button class="btn" data-act="hr"><i data-lucide="minus"></i>Line</button>
+        <button class="btn" data-act="pageBreak" title="Ctrl+Enter"><i data-lucide="separator-horizontal"></i>Page break</button>
+        <button class="btn" data-act="codeBlock"><i data-lucide="code"></i>Code</button>
+      </div>
+      <div class="group">
+        <button class="btn" data-act="charMenu"><i data-lucide="omega"></i>Symbol</button>
+        <button class="btn" data-act="dateMenu"><i data-lucide="calendar"></i>Date</button>
+      </div>
+      <div class="group">
+        <button class="btn" data-act="footnote" title="Ctrl+Alt+F"><i data-lucide="superscript"></i>Footnote</button>
+        <button class="btn" data-act="toc"><i data-lucide="list-tree"></i>Contents</button>
+        <button class="btn" data-act="tocUpdate" title="Refresh every table of contents"><i data-lucide="refresh-cw"></i>Update contents</button>
+      </div>
+      <div class="group">
+        <button class="btn" data-act="comment" title="Ctrl+Alt+M"><i data-lucide="message-square-plus"></i>Comment</button>
+      </div>
+    </div>
+
+    <!-- LAYOUT -->
+    <div class="panel" data-panel="layout">
+      <div class="group">
+        <label class="hint" for="selPage">Size</label>
+        <select id="selPage"><option value="A4">A4</option><option value="Letter">Letter</option><option value="Legal">Legal</option><option value="A5">A5</option><option value="Custom">Custom…</option></select>
+      </div>
+      <div class="group">
+        <button class="icon-btn" data-act="orient" data-v="portrait" title="Portrait"><i data-lucide="rectangle-vertical"></i></button>
+        <button class="icon-btn" data-act="orient" data-v="landscape" title="Landscape"><i data-lucide="rectangle-horizontal"></i></button>
+      </div>
+      <div class="group">
+        <label class="hint" for="selMargin">Margins</label>
+        <select id="selMargin">
+          <option value="normal">Normal (1")</option><option value="narrow">Narrow (0.5")</option>
+          <option value="moderate">Moderate (1" / 0.75")</option><option value="wide">Wide (1" / 2")</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </div>
+      <div class="group">
+        <button class="btn" data-act="columnsMenu"><i data-lucide="columns-2"></i>Columns</button>
+      </div>
+      <div class="group">
+        <button class="btn" data-act="editHeader"><i data-lucide="panel-top"></i>Header</button>
+        <button class="btn" data-act="editFooter"><i data-lucide="panel-bottom"></i>Footer</button>
+        <button class="btn" data-act="pageNumbers"><i data-lucide="file-text"></i>Page numbers</button>
+      </div>
+    </div>
+
+    <!-- REVIEW -->
+    <div class="panel" data-panel="review">
+      <div class="group">
+        <button class="btn" id="btnTrack" data-act="toggleTrack" title="Ctrl+Shift+X"><i data-lucide="file-pen-line"></i>Track changes</button>
+        <button class="btn" id="btnMarkup" data-act="toggleMarkup"><i data-lucide="eye"></i>Show markup</button>
+      </div>
+      <div class="group">
+        <button class="btn" data-act="changesPanel"><i data-lucide="git-compare"></i>Changes</button>
+        <button class="btn" data-act="acceptAll"><i data-lucide="check-check"></i>Accept all</button>
+        <button class="btn" data-act="rejectAll"><i data-lucide="x"></i>Reject all</button>
+      </div>
+      <div class="group">
+        <button class="btn" data-act="comment"><i data-lucide="message-square-plus"></i>New comment</button>
+        <button class="btn" data-act="commentsPanel"><i data-lucide="message-square"></i>Comments</button>
+      </div>
+      <div class="group">
+        <button class="btn" data-act="saveVersion" title="Ctrl+Shift+S"><i data-lucide="save"></i>Save version</button>
+        <button class="btn" data-act="versionsPanel"><i data-lucide="history"></i>History</button>
+      </div>
+      <div class="group">
+        <button class="btn" id="btnSpell" data-act="toggleSpell"><i data-lucide="spell-check"></i>Spelling</button>
+        <button class="btn" data-act="wordCount"><i data-lucide="type"></i>Word count</button>
+      </div>
+    </div>
+
+    <!-- MAILINGS -->
+    <div class="panel" data-panel="mailings">
+      <div class="group">
+        <button class="btn" data-act="mmRecipients"><i data-lucide="users"></i>Recipients</button>
+        <button class="btn" data-act="mmField"><i data-lucide="braces"></i>Insert merge field</button>
+      </div>
+      <div class="group">
+        <button class="btn" id="btnPreview" data-act="mmPreview"><i data-lucide="eye"></i>Preview results</button>
+        <button class="icon-btn" data-act="mmPrev" title="Previous record"><i data-lucide="chevron-left"></i></button>
+        <span class="hint" id="mmPos" style="min-width:56px;text-align:center">—</span>
+        <button class="icon-btn" data-act="mmNext" title="Next record"><i data-lucide="chevron-right"></i></button>
+      </div>
+      <div class="group">
+        <button class="btn primary" data-act="mmFinish"><i data-lucide="files"></i>Finish &amp; merge</button>
+      </div>
+    </div>
+
+    <!-- VIEW -->
+    <div class="panel" data-panel="view">
+      <div class="group">
+        <button class="icon-btn" data-act="zoomOut" title="Zoom out"><i data-lucide="zoom-out"></i></button>
+        <button class="btn" data-act="zoomReset">100%</button>
+        <button class="icon-btn" data-act="zoomIn" title="Zoom in"><i data-lucide="zoom-in"></i></button>
+        <button class="btn" data-act="zoomFit">Fit width</button>
+      </div>
+      <div class="group">
+        <button class="btn" id="btnPages" data-act="togglePages"><i data-lucide="file-stack"></i>Page view</button>
+        <button class="btn" data-act="focusMode"><i data-lucide="focus"></i>Focus mode</button>
+        <button class="btn" data-act="fullscreen"><i data-lucide="maximize"></i>Full screen</button>
+      </div>
+      <div class="group">
+        <button class="btn" data-act="theme" data-v="light"><i data-lucide="sun"></i>Light</button>
+        <button class="btn" data-act="theme" data-v="dark"><i data-lucide="moon"></i>Dark</button>
+        <button class="btn" data-act="theme" data-v="system"><i data-lucide="monitor"></i>System</button>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- ============ MAIN ============ -->
+<div class="main">
+  <aside class="sidebar" id="sidebar">
+    <div class="side-head">
+      <button class="btn primary" data-act="newDoc"><i data-lucide="file-plus"></i>New document</button>
+      <input class="side-search" id="docSearch" type="search" placeholder="Search documents…">
+    </div>
+    <div class="doc-list" id="docList"></div>
+    <div class="side-foot">
+      <button class="btn small" data-act="import"><i data-lucide="file-up"></i>Import</button>
+      <button class="btn small" data-act="syncSettings"><i data-lucide="cloud"></i>Sync</button>
+      <button class="btn small" data-act="settings"><i data-lucide="settings"></i></button>
+    </div>
+  </aside>
+
+  <section class="canvas" id="canvas">
+    <div class="page-wrap" id="pageWrap">
+      <div class="page" id="page">
+        <div class="sheets" id="sheets"></div>
+        <div class="overlays" id="overlays"></div>
+        <div class="page-header" id="pageHeader"><div class="hf-field" id="hdr" contenteditable="plaintext-only" data-placeholder="Header — click to add. Use {page}, {pages}, {title}, {date}" spellcheck="false"></div></div>
+        <div id="editor" contenteditable="true" spellcheck="true"></div>
+        <div class="page-footer" id="pageFooter"><div class="hf-field" id="ftr" contenteditable="plaintext-only" data-placeholder="Footer — click to add. Use {page}, {pages}, {title}, {date}" spellcheck="false"></div></div>
+      </div>
+    </div>
+
+    <div class="floatbar" id="tableBar">
+      <button class="icon-btn" data-tbl="rowAbove" title="Insert row above"><i data-lucide="arrow-up-to-line"></i></button>
+      <button class="icon-btn" data-tbl="rowBelow" title="Insert row below"><i data-lucide="arrow-down-to-line"></i></button>
+      <button class="icon-btn" data-tbl="colLeft" title="Insert column left"><i data-lucide="arrow-left-to-line"></i></button>
+      <button class="icon-btn" data-tbl="colRight" title="Insert column right"><i data-lucide="arrow-right-to-line"></i></button>
+      <span class="sep"></span>
+      <button class="btn" data-tbl="delRow" title="Delete row"><i data-lucide="rows-3"></i>−</button>
+      <button class="btn" data-tbl="delCol" title="Delete column"><i data-lucide="columns-3"></i>−</button>
+      <button class="btn" data-tbl="header" title="Toggle header row">Header</button>
+      <span class="sep"></span>
+      <button class="icon-btn" data-tbl="delTable" title="Delete table"><i data-lucide="trash-2"></i></button>
+    </div>
+
+    <div class="floatbar" id="imageBar">
+      <button class="btn" data-img="25">25%</button>
+      <button class="btn" data-img="50">50%</button>
+      <button class="btn" data-img="75">75%</button>
+      <button class="btn" data-img="100">100%</button>
+      <span class="sep"></span>
+      <button class="icon-btn" data-img="left" title="Float left, text wraps"><i data-lucide="align-left"></i></button>
+      <button class="icon-btn" data-img="center" title="Centre on its own line"><i data-lucide="align-center"></i></button>
+      <button class="icon-btn" data-img="right" title="Float right, text wraps"><i data-lucide="align-right"></i></button>
+      <span class="sep"></span>
+      <button class="btn" data-img="alt">Alt text</button>
+      <button class="icon-btn" data-img="delete" title="Delete image"><i data-lucide="trash-2"></i></button>
+    </div>
+
+    <div class="floatbar" id="linkBar">
+      <a class="btn" id="linkOpen" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link"></i><span id="linkHref" style="max-width:200px;overflow:hidden;text-overflow:ellipsis"></span></a>
+      <span class="sep"></span>
+      <button class="icon-btn" data-lnk="edit" title="Edit link"><i data-lucide="pencil"></i></button>
+      <button class="icon-btn" data-lnk="remove" title="Remove link"><i data-lucide="unlink"></i></button>
+    </div>
+  </section>
+
+  <aside class="rpanel" id="rpanel">
+    <div class="rp-head"><span id="rpTitle">Panel</span><div class="spacer"></div><button class="icon-btn" data-act="closePanel" title="Close"><i data-lucide="x"></i></button></div>
+    <div id="rpActions" class="rp-actions" hidden></div>
+    <div class="rp-body" id="rpBody"></div>
+  </aside>
+</div>
+
+<!-- ============ STATUS BAR ============ -->
+<footer class="statusbar">
+  <span id="stPages">Page 1 of 1</span>
+  <span id="stWords">0 words</span>
+  <span id="stTrack"></span>
+  <span id="stSave" class="hide-sm"></span>
+  <div class="zoom">
+    <button class="icon-btn" data-act="zoomOut" title="Zoom out"><i data-lucide="minus"></i></button>
+    <input type="range" id="zoomRange" min="30" max="200" step="10" value="100" aria-label="Zoom">
+    <button class="icon-btn" data-act="zoomIn" title="Zoom in"><i data-lucide="plus"></i></button>
+    <span id="zoomLabel" style="width:38px;text-align:right">100%</span>
+  </div>
+</footer>
+
+<button class="btn outline exit-focus" data-act="focusMode"><i data-lucide="x"></i>Exit focus</button>
+
+<div class="menu" id="menu"></div>
+<div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
+<div class="toast-wrap" id="toasts"></div>
+<input type="file" id="fileImage" accept="image/*" hidden>
+<input type="file" id="fileImport" accept=".docx,.html,.htm,.md,.markdown,.txt,.json" hidden>
+
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/docx@9.5.1/dist/index.iife.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/turndown-plugin-gfm@1.0.2/dist/turndown-plugin-gfm.js" defer></script>
+<script src="templates.js"></script>
+<script src="docx-import.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
