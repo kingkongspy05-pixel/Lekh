@@ -14,7 +14,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const TAB_ID = uid('t');
-const LEKH_VERSION = 11;
+const LEKH_VERSION = 13;
 const GIST_DESC = 'Lekh documents (sync) — do not edit by hand';
 const editor = $('#editor'), page = $('#page'), pageWrap = $('#pageWrap'), canvas = $('#canvas');
 const hdr = $('#hdr'), ftr = $('#ftr');
@@ -541,11 +541,11 @@ const Pager = {
   /* Incremental layout: a MutationObserver remembers the earliest edited spot; run() re-flows from
      there and stops as soon as a later block lands exactly where it was last time (everything after it
      is then unchanged). Long re-flows are done in slices so typing never freezes. */
-  full: true, key: '', dirtyNode: null, resumeEl: null, mustReach: null, tops: new WeakMap(), mo: null, sliceT: null,
+  full: true, key: '', dirtyNode: null, dirtyLast: null, resumeEl: null, mustReach: null, tops: new WeakMap(), mo: null, sliceT: null,
   invalidate() { this.full = true; },
   watch() {
     this.mo = new MutationObserver(recs => this.noteMut(recs));
-    this.mo.observe(editor, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['style', 'class', 'src', 'width', 'height', 'colspan', 'rowspan'] });
+    this.mo.observe(editor, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['style', 'class', 'src', 'width', 'height', 'colspan', 'rowspan', 'data-note'] });
   },
   isGap: n => n && n.nodeType === 1 && n.classList.contains('pg-gap'),
   noteMut(recs) {
@@ -568,9 +568,10 @@ const Pager = {
       this.markDirty(n);
     }
   },
-  markDirty(n) {
-    const d = this.dirtyNode;
+  markDirty(n) {                            // remember the first AND the last changed spot (Replace all etc. change many)
+    const d = this.dirtyNode, l = this.dirtyLast;
     if (!d || !d.isConnected || (n.compareDocumentPosition(d) & Node.DOCUMENT_POSITION_FOLLOWING)) this.dirtyNode = n;
+    if (!l || !l.isConnected || (l.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING)) this.dirtyLast = n;
   },
   indexOf(leaves, node) {                    // first leaf at or after node (leaves are in document order)
     let lo = 0, hi = leaves.length;
@@ -598,7 +599,7 @@ const Pager = {
   schedule(ms = 80) {
     // debounce, but while someone types non-stop still re-flow at least every ~250 ms
     const now = performance.now();
-    if (this.timer && this.pendingSince && now - this.pendingSince > 250) return;
+    if (this.timer && this.pendingSince && now - this.pendingSince > 250 && this.canInc !== false) return;
     if (!this.timer) this.pendingSince = now;
     clearTimeout(this.timer);
     this.timer = setTimeout(() => { this.timer = null; this.pendingSince = 0; this.run(); }, Math.max(ms, Math.min(900, this.cost * 3)));
@@ -709,9 +710,12 @@ const Pager = {
     fns.forEach(f => this.noteHeight(f.dataset.note || '', cw));
     const key = [z, G, w, h, m.t, m.b, m.l, m.r, pagesOn, printing, settings.pageView].join('|');
     const va0 = cur.page.valign;
-    const incremental = pagesOn && !this.full && key === this.key && !fns.length && va0 !== 'center' && va0 !== 'bottom' && !editor.querySelector('.cols');
+    const canInc = pagesOn && va0 !== 'center' && va0 !== 'bottom'; this.canInc = canInc;   // centred/bottom pages need every page measured together
+    const incremental = canInc && !this.full && key === this.key;
     if (incremental && !this.dirtyNode && !this.resumeEl) {   // nothing changed in the text: only refresh sheets/overlays
-      this.render({ ...this.lastO, notes: new Map(), area: () => 0, fns: [] }); this.mo.takeRecords(); return;
+      const nm = new Map(); for (const [f, pg] of this.fnOwner || []) if (f.isConnected) { if (!nm.has(pg)) nm.set(pg, []); nm.get(pg).push(f); }
+      const nh0 = f => this.noteHeight(f.dataset.note || '', cw);
+      this.render({ ...this.lastO, notes: nm, area: pg => { const a = nm.get(pg); return a && a.length ? 10 + a.reduce((s2, f) => s2 + nh0(f), 0) : 0; }, fns }); this.mo.takeRecords(); return;
     }
     if (!incremental) { this.strip(); this.tops = new WeakMap(); this.resumeEl = null; }
     this.full = false; this.key = key;
@@ -721,6 +725,10 @@ const Pager = {
     const pTop = p => p * (H + G), cTop = p => pTop(p) + mT;
     const pageOf = y => Math.max(0, Math.floor(y / (H + G)));
     const notes = new Map(), owner = new Map(), gapFor = new Map(), used = new Map();
+    // footnotes: keep last run's page for each note so an incremental re-flow knows the note area of pages it doesn't revisit
+    const prevOwner = incremental && this.fnOwner ? this.fnOwner : new Map(), prevArea = incremental && this.fnArea ? this.fnArea : new Map();
+    let fnTouched = -1;                       // last page whose footnote area may differ from last time
+    for (const [f, pg] of prevOwner) { if (f.isConnected) { owner.set(f, pg); if (!notes.has(pg)) notes.set(pg, []); notes.get(pg).push(f); } else fnTouched = Math.max(fnTouched, pg); }
     const use = (p, b) => used.set(p, Math.max(used.get(p) || 0, b));
     const nh = f => this.noteHeight(f.dataset.note || '', cw);
     const area = p => { const a = notes.get(p); return a && a.length ? 10 + a.reduce((s, f) => s + nh(f), 0) : 0; };
@@ -760,18 +768,22 @@ const Pager = {
         if (!cands.length) cands.push(0);
         start = Math.max(0, Math.min(...cands) - 1);
         const mr = this.mustReach && this.mustReach.isConnected ? this.indexOf(leaves, this.mustReach) : -1;
-        dirtyIdx = Math.max(mr, ...cands);
+        const dl = this.dirtyLast && this.dirtyLast.isConnected ? this.indexOf(leaves, this.dirtyLast) : -1;
+        dirtyIdx = Math.max(mr, dl, ...cands);
       }
       const reach = dirtyIdx;
-      this.dirtyNode = null; this.resumeEl = null;
+      this.dirtyNode = null; this.dirtyLast = null; this.resumeEl = null;
       const viewBottom = Y(canvas.getBoundingClientRect().bottom) + 200;
-      const budget = sync ? Infinity : 24;
+      const budget = sync || !canInc ? Infinity : 24;      // a full pass that can't be resumed must finish in one go
       for (let i = start; i < leaves.length; i++) {
         const L = leaves[i]; const el = L.el; if (!el.isConnected) continue;
         if (incremental) {
           if (i > dirtyIdx) {
             const old = this.tops.get(el);
-            if (old != null && Math.abs(Y(el.getBoundingClientRect().top) - old) < 0.5) break;   // converged: the rest is unchanged
+            if (old != null) {
+              const tY = Y(el.getBoundingClientRect().top), pg0 = pageOf(tY);
+              if (Math.abs(tY - old) < 0.5 && pg0 > fnTouched && Math.abs(area(pg0) - (prevArea.get(pg0) || 0)) < 0.5) break;   // converged: the rest is unchanged
+            }
           }
           if (performance.now() - t0 > budget && i > start + 1 && Y(el.getBoundingClientRect().top) > viewBottom) { paused = el; break; }
           this.dropOwn(L);
@@ -822,6 +834,7 @@ const Pager = {
           if (!acted) { lastBottom = Math.max(lastBottom, lines[lines.length - 1].bottom, bottom); lines.forEach(l => use(pageOf(l.top), l.bottom)); break; }
         }
         if (el.isConnected) this.tops.set(el, Y(el.getBoundingClientRect().top));
+        for (const f of refs) { const a = prevOwner.get(f), b = owner.get(f); if (a !== b || this.fnH?.get(f) !== nh(f)) fnTouched = Math.max(fnTouched, a ?? -1, b ?? -1); }
       }
       if (paused) {
         // remember how far an unfinished re-flow still has to go, even if the next slice restarts earlier
@@ -861,10 +874,11 @@ const Pager = {
     this.geo = { H, G, z, mT, mB, pagesOn };
     stats.pages = N; renderStatus();
     this.lastO = { N, H, G, mT, mB, mL, mR, total, contentH, pagesOn };
+    this.fnOwner = owner; this.fnArea = new Map([...notes.keys()].map(pg => [pg, area(pg)])); this.fnH = new Map(fns.map(f => [f, nh(f)]));
     this.render({ N, H, G, mT, mB, mL, mR, total, notes, area, contentH, pagesOn, fns });
     if (panelMode === 'find' && !paused) Find.build();
     this.mo.takeRecords();                    // our own spacer changes are not edits
-    this.cost = paused || !incremental ? Math.min(40, performance.now() - t0) : performance.now() - t0;   // a one-off full re-flow shouldn't slow later typing
+    this.cost = !canInc ? performance.now() - t0 : paused || !incremental ? Math.min(40, performance.now() - t0) : performance.now() - t0;   // a one-off full re-flow shouldn't slow later typing
     if (paused) this.sliceT = setTimeout(() => this.run(), 16);
   },
   render(o) {
@@ -1600,9 +1614,17 @@ const Find = {
     if (!this.matches.length) return;
     const n = this.matches.length;
     editor.focus({ preventScroll: true }); History.push('replace', true);
-    for (let i = this.matches.length - 1; i >= 0; i--) {
-      const m = this.matches[i]; setRange(m.r.cloneRange());
-      if (cur.track) trackedInsert(this.replacement(m)); else document.execCommand('insertText', false, this.replacement(m));
+    if (cur.track) {
+      for (let i = this.matches.length - 1; i >= 0; i--) { const m = this.matches[i]; setRange(m.r.cloneRange()); trackedInsert(this.replacement(m)); }
+    } else {
+      // swap the text directly (last match first so earlier positions stay valid); going through the browser's
+      // typing command once per match took ~20 s on a 300-page novel
+      for (let i = this.matches.length - 1; i >= 0; i--) {
+        const m = this.matches[i], r = m.r; if (!editor.contains(r.startContainer)) continue;
+        const rep = this.replacement(m); r.deleteContents();
+        if (rep) { if (r.startContainer.nodeType === 3) { r.startContainer.insertData(r.startOffset, rep); } else r.insertNode(document.createTextNode(rep)); }
+      }
+      const c = document.createRange(); const last = this.matches[0].r; c.setStart(last.startContainer, Math.min(last.startOffset, last.startContainer.length ?? last.startOffset)); c.collapse(true); setRange(c);
     }
     markChanged(); this.idx = -1; this.build(); toast(`Replaced ${n} occurrence${n > 1 ? 's' : ''}`);
   },
@@ -2294,7 +2316,7 @@ ov.addEventListener('click', async e => {
 
 /* ============================================================ columns */
 function topBlockOf(n) { while (n && n.parentNode && n.parentNode !== editor) n = n.parentNode; return n && n.parentNode === editor ? n : null; }
-function setColumns(n) {
+function setColumns(n) { Pager.invalidate();
   restoreSel(); const r = selRange() || lastRange; if (!r) return;
   History.push('cols', true);
   const existing = closestEl(r.startContainer, '.cols');
@@ -4094,7 +4116,8 @@ function showShortcuts() {
     ['Find / Replace', `${k}+F / ${k}+H`], ['Insert link', `${k}+K`], ['Page break', `${k}+Enter`], ['Heading 1–4 / Normal', `${k}+Alt+1…4 / 0`],
     ['Bullets / Numbering / Checklist', `${k}+Shift+8 / 7 / 9`], ['Align left / centre / right / justify', `${k}+Shift+L / E / R / J`],
     ['Comment', `${k}+Alt+M`], ['Footnote', `${k}+Alt+F`], ['Format painter', 'Paintbrush button (double-click to keep on)'], ['Browser spelling menu', 'Shift + right-click'], ['Track changes on/off', `${k}+Shift+X`], ['Paste as plain text', `${k}+Shift+V`], ['Clear formatting', `${k}+\\`],
-    ['Indent in lists / next table cell', 'Tab'], ['New document', 'Alt+N'], ['Documents sidebar', `${k}+Shift+O`], ['Print / PDF', `${k}+P`]
+    ['Tab (every ½ inch) · indent a list item · next table cell', 'Tab'], ['Outdent / previous table cell', 'Shift+Tab'], ['Grow / shrink font', `${k}+] / ${k}+[`],
+    ['Go to page', `${k}+G`], ['Follow a link (also links to bookmarks)', `${k}+click`], ['New document', 'Alt+N'], ['Documents sidebar', `${k}+Shift+O`], ['Print / PDF', `${k}+P`]
   ];
   modal({ title: 'Keyboard shortcuts', body: `<table style="width:100%;border-collapse:collapse">${rows.map(([a, b]) => `<tr><td style="padding:5px 0">${a}</td><td style="text-align:right"><code>${esc(b)}</code></td></tr>`).join('')}</table>`, buttons: [{ label: 'Close', primary: true }] });
 }

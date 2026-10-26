@@ -202,7 +202,7 @@ svg.lucide { width: 18px; height: 18px; stroke-width: 1.9; flex: none; }
   caret-color: #1c2230; word-wrap: break-word; overflow-wrap: anywhere;
 }
 #editor:empty::before { content: "Start typing…"; color: #a0a6b1; }
-#editor { counter-reset: fn; tab-size: 4; }
+#editor { counter-reset: fn; tab-size: 0.5in; -moz-tab-size: 0.5in; }
 #editor .pg-gap { display: block; user-select: none; pointer-events: none; }
 #editor tr.pg-gap { display: table-row; } #editor tr.pg-gap td { border: 0 !important; padding: 0 !important; background: transparent !important; }
 #editor sup.fn { counter-increment: fn; color: #1d5bbf; cursor: pointer; padding: 0 1px; font-size: .72em; user-select: all; }
@@ -616,7 +616,7 @@ body.focus .exit-focus { display: inline-flex; }
   .mbar .icon-btn svg.lucide { width: 20px; height: 20px; }
   .mbar .msep { width: 1px; height: 24px; background: var(--line); margin: 0 4px; flex: none; }
   .statusbar { gap: 10px; padding: 2px 8px; min-height: 30px; }
-  .statusbar .views [data-act="focusMode"], #vWeb, #stWords { display: none; }
+  .statusbar .views [data-act="focusMode"], #stWords { display: none; }
   .zoom input[type=range], #zoomLabel { display: none; }
   .canvas { padding: 10px 6px 40px; touch-action: pan-x pan-y; }
   .topbar .pill span { display: none; }
