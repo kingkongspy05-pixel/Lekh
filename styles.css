@@ -623,3 +623,5 @@ body.focus .exit-focus { display: inline-flex; }
   .topbar { gap: 6px; padding: 4px 8px; }
   .title-input { font-size: 15px; }
 }
+
+.db-blocked { position: fixed; left: 50%; top: 96px; transform: translateX(-50%); z-index: 100; max-width: min(560px, 92vw); padding: 14px 18px; border-radius: 10px; background: #fff7e0; color: #4a3500; border: 1px solid #f0d58a; box-shadow: var(--shadow-pop); font-size: 14px; line-height: 1.45; }

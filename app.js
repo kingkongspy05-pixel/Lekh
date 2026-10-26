@@ -14,7 +14,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const TAB_ID = uid('t');
-const LEKH_VERSION = 10;
+const LEKH_VERSION = 11;
 const GIST_DESC = 'Lekh documents (sync) — do not edit by hand';
 const editor = $('#editor'), page = $('#page'), pageWrap = $('#pageWrap'), canvas = $('#canvas');
 const hdr = $('#hdr'), ftr = $('#ftr');
@@ -69,7 +69,14 @@ const DB = {
         if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
         if (!d.objectStoreNames.contains('vers')) d.createObjectStore('vers', { keyPath: 'id' });
       };
-      r.onsuccess = () => { this.db = r.result; this.db.onversionchange = () => { this.db.close(); location.reload(); }; res(); };
+      // another Lekh tab/window still running an older version keeps the database open: say so instead of sitting blank
+      r.onblocked = () => {
+        if ($('#dbBlocked')) return;
+        const b = document.createElement('div'); b.id = 'dbBlocked'; b.className = 'db-blocked';
+        b.innerHTML = '<b>Lekh was updated.</b> Close every other Lekh tab or window (including the installed app and other browser windows) — this page will open by itself. Your documents are safe.';
+        document.body.appendChild(b);
+      };
+      r.onsuccess = () => { $('#dbBlocked')?.remove(); this.db = r.result; this.db.onversionchange = () => { this.db.close(); location.reload(); }; res(); };
       r.onerror = () => rej(r.error);
     });
   },
