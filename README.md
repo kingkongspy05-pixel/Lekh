@@ -37,7 +37,8 @@ How it behaves:
 | Paragraphs | Styles (Title, Subtitle, Heading 1–4, Quote, Code), bullets, numbering, checklists, nested lists, indent, alignment, line spacing |
 | Tables | Contextual **Table** tab: insert/delete rows & columns, **merge & split cells** (drag across cells to select a block), **vertical alignment** (top/middle/bottom), cell shading, table styles (Grid, Blue header, Banded, Minimal, Plain), borders (all/outside/horizontal/none), header row, banded rows, even columns, fit page/contents, **drag column borders to resize**, **text wrap around the table** — all carried into Word export and back |
 | Images | Resize with presets or the **corner drag handle**; **Wrap**: in line, text around (image left/right), or on its own line (left/centre/right); alt text — wrap settings export to Word as real floating images |
-| Insert | Tables (Tab to move between cells), images (upload, paste, drag-drop; auto-compressed), links, horizontal line, page breaks, symbols (₹ etc.), dates, table of contents, **footnotes** (shown at the bottom of their page) |
+| Design | **Themes** (font + colour sets for headings and body, incl. Devanagari), **watermark** (CONFIDENTIAL, DRAFT or your own text), **page colour**, **page borders** |
+| Insert | Tables (Tab to move between cells), images (upload, paste, drag-drop; auto-compressed), links, **bookmarks and links to a heading or bookmark in the same document**, horizontal line, page breaks, symbols (₹ etc.), dates, table of contents, **footnotes** (shown at the bottom of their page) |
 | Layout | **Real pages on screen** (text flows page to page exactly as it prints), A4 / Letter / Legal / A5 / custom size, portrait/landscape, margins, **columns** (1–3), **vertical alignment of text on the page** (top/centre/bottom, e.g. for cover pages), header & footer on every page with `{page}`, `{pages}`, `{title}`, `{date}`. View → Page view switches to a continuous scroll |
 | Review | Track changes with accept/reject (per change or all), comments with replies and resolve, version history (auto every 10 min + named versions), word count |
 | Mailings | **Mail merge**: paste or import a CSV list, insert «fields», preview each record, merge to a new document, one Word file, or a .zip with one Word file per person |
@@ -48,6 +49,8 @@ How it behaves:
 After connecting sync, open **Sync → Turn on encryption** and choose a passphrase. Lekh moves everything into a fresh gist where every document is encrypted (AES-256) in your browser before upload, and deletes the old readable gist so no plain-text history remains. Other devices ask for the passphrase once. **If you forget the passphrase, the synced copies cannot be opened** — documents already on your devices stay readable.
 
 ### Writing tools
+- **Go to page**: click “Page X of Y” in the status bar or press Ctrl+G.
+- **On a phone**: everyday tools sit in a bar at the bottom; the sliders button opens every tab. Pinch to zoom, or tap ↔ to fit the page to the screen.
 - **Home tab like Word's**: Cut / Copy / Paste, grow & shrink font (Ctrl+] / Ctrl+[), change case (Aa), bullet and numbering styles (incl. 1.1.1 multilevel), sort A–Z, show ¶ marks, paragraph & cell **shading**, **Borders** (bottom/top/left/right/all/outside/inside/none with line weight, style and colour — for table cells or paragraphs), Select.
 - **Views** (bottom right, like Word): Focus, **Read mode**, **Print layout**, **Web layout**, **Multiple pages** (1–4 pages per row; click one to edit it).
 - **Navigation pane** (View → Navigation, or the sidebar tab): your headings as an outline; click to jump; drag or use the arrows to move a whole section with its sub-headings.
@@ -67,7 +70,9 @@ After connecting sync, open **Sync → Turn on encryption** and choose a passphr
 - **Word import:** `.doc` (old 97–2003 format) isn't supported — save as `.docx` first. Text boxes, shapes, charts and SmartArt are skipped; headers are imported as one centred line; images in EMF/WMF format show as “[image]”.
 - **Track changes covers typing and deleting.** Formatting changes and line breaks are not tracked. On Android keyboards with predictive text, some edits may not be tracked.
 - **Comments aren't included in `.docx` export** (they are imported from Word).
-- **Very long documents** (100+ pages) re-flow pages a fraction of a second after you stop typing; use View → Page view to switch to continuous scrolling if it feels slow.
+- **Watermarks don't go into the Word file** (page colour, page borders, themes and bookmarks do).
+- **Multiple pages view is for looking and jumping**: click a spot on any page and the cursor lands right there in the normal view; you can't type inside the thumbnails themselves.
+- **Very long documents** (300+ pages) stay smooth: only the pages after your edit are re-flowed. On a slow phone, Web layout (globe icon) is still the lightest way to write.
 - **Big images make sync slow.** Images are compressed on insert, but a document with many photos can reach several MB.
 - Everything lives in the browser's storage on each device. Clearing site data deletes local copies — keep sync on or download a backup now and then (**File → Back up all documents**).
 

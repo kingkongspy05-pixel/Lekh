@@ -230,6 +230,17 @@ async function convert(buf) {
       contentWidthPx = w * 96;
     }
     const va = at(kid(lastSect, 'vAlign'), 'val'); if (va === 'center' || va === 'bottom') page.valign = va;
+    // page borders (Design → Page borders); we draw one border style for all four sides
+    const pgb = kid(lastSect, 'pgBorders');
+    if (pgb) {
+      const side = kid(pgb, 'top') || kid(pgb, 'left') || kid(pgb, 'bottom') || kid(pgb, 'right');
+      const v = side && at(side, 'val');
+      if (v && !/^(nil|none)$/.test(v)) {
+        const style = /double/.test(v) ? 'double' : /thick/.test(v) ? 'thick' : /dash/.test(v) ? 'dashed' : /dot/.test(v) ? 'dotted' : 'solid';
+        const col = at(side, 'color'); const fromText = at(pgb, 'offsetFrom') !== 'page';
+        page.border = { style, w: Math.max(0.25, (+at(side, 'sz') || 4) / 8), color: col && col !== 'auto' ? '#' + col : '#000000', off: fromText ? 24 : Math.min(72, +at(side, 'space') || 24) };
+      }
+    }
     if (mar) {
       const g = k => Math.max(0, Math.round(((+at(mar, k) || 0) / 1440) * 100) / 100);
       page.margins = { t: g('top') || 0.5, r: g('right'), b: g('bottom') || 0.5, l: g('left') };
@@ -237,7 +248,14 @@ async function convert(buf) {
     }
   }
 
+  // page colour (Design → Page colour)
+  const bgc = at(kid(doc.documentElement, 'background'), 'color');
+  if (bgc && /^[0-9a-f]{6}$/i.test(bgc) && !/^ffffff$/i.test(bgc)) page.color = '#' + bgc.toLowerCase();
+
   /* ---------- conversion context ---------- */
+  const linkedAnchors = new Set(desc(doc.documentElement, 'hyperlink').map(h => at(h, 'anchor')).filter(Boolean));
+  for (const t of desc(doc.documentElement, 'instrText')) { const m = /HYPERLINK\s+\\l\s+"([^"]+)"/i.exec(t.textContent || ''); if (m) linkedAnchors.add(m[1]); }
+  const seenBm = new Set();
   const usedComments = new Set();
   const ctx = { fld: [], openC: [] };
 
@@ -246,7 +264,7 @@ async function convert(buf) {
     if (word === 'PAGE') return { emit: '{page}', skip: true };
     if (word === 'NUMPAGES' || word === 'SECTIONPAGES') return { emit: '{pages}', skip: true };
     if (word === 'MERGEFIELD') { const name = (s.match(/MERGEFIELD\s+"?([^"\\]+?)"?(\s|\\|$)/i) || [])[1]; if (name) return { emit: `<span class="mf" contenteditable="false" data-field="${esc(name.trim())}"></span>`, skip: true, html: true }; }
-    if (word === 'HYPERLINK') { const m = s.match(/HYPERLINK\s+(?:\\l\s+)?"([^"]+)"/i); if (m) { const local = /\\l/.test(s); const href = local ? '#' + m[1] : m[1]; if (/^(https?:|mailto:|tel:|#)/i.test(href)) return { open: `<a href="${esc(href)}">`, close: '</a>' }; } }
+    if (word === 'HYPERLINK') { const m = s.match(/HYPERLINK\s+(?:\\l\s+)?"([^"]+)"/i); if (m) { const local = /\\l/.test(s); const href = local ? '#bm-' + m[1] : m[1]; if (/^(https?:|mailto:|tel:|#)/i.test(href)) return { open: `<a href="${esc(href)}">`, close: '</a>' }; } }
     return {};
   }
   const suppressed = () => ctx.fld.some(f => f.phase === 'instr' || (f.kind && f.kind.skip));
@@ -343,9 +361,14 @@ async function convert(buf) {
     for (const c of kids(node)) {
       switch (c.localName) {
         case 'r': out += run(c, env); break;
+        case 'bookmarkStart': {                  // Word bookmarks: keep the named ones and hidden ones that links point to
+          const nm = at(c, 'name') || '';
+          if (nm && (nm[0] !== '_' || linkedAnchors.has(nm)) && !seenBm.has(nm)) { seenBm.add(nm); out += `<span class="bm" contenteditable="false" data-bm="${esc(nm)}" id="bm-${esc(nm)}"></span>`; }
+          break;
+        }
         case 'hyperlink': {
           const id = rid(c); const anchor = at(c, 'anchor');
-          const href = id ? env.rels.get(id)?.target : anchor ? '#' + anchor : null;
+          const href = id ? env.rels.get(id)?.target : anchor ? '#bm-' + anchor : null;
           const inner = inline(c, env);
           out += href && /^(https?:|mailto:|tel:|#)/i.test(href) ? `<a href="${esc(href)}">${inner}</a>` : inner; break;
         }
@@ -391,7 +414,9 @@ async function convert(buf) {
     if (own.bdr) { for (const [k, v] of Object.entries(own.bdr)) st.push(`border-${k}:${v}`); if (Object.keys(own.bdr).length) st.push('padding:2pt 4pt'); }
     if (own.shd) st.push(`background-color:#${own.shd}`);
     if (pp.lineRule === 'auto' && pp.line && pp.line !== 240 && pp.line !== 259 && pp.line !== 276) st.push(`line-height:${Math.round((pp.line / 240) * 1.2 * 100) / 100}`);
-    const listed = pp.numId && pp.numId !== '0';
+    // numId 0, or a level whose format is "none" / has no bullet text, shows no marker in Word: not a list
+    const lvl0 = pp.numId && pp.numId !== '0' ? numbering(pp.numId, pp.ilvl || 0) : null;
+    const listed = !!(pp.numId && pp.numId !== '0') && !(lvl0 && (lvl0.fmt === 'none' || (lvl0.fmt === 'bullet' && !lvl0.text.trim())));
     if (!listed) {
       if (pp.indL) st.push(`margin-left:${Math.round(pp.indL / 1440 * 100) / 100}in`);
       if (pp.indFirst) st.push(`text-indent:${Math.round(pp.indFirst / 1440 * 100) / 100}in`);

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Lekh — Documents</title>
 <meta name="description" content="A personal word processor that runs in your browser and syncs through a private GitHub Gist.">
 <meta name="theme-color" content="#4338CA">
@@ -12,7 +12,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Carlito:ital,wght@0,400;0,700;1,400;1,700&family=EB+Garamond:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;600;700&family=Lora:ital,wght@0,400;0,700;1,400&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&family=Noto+Sans+Devanagari:wght@400;700&family=Noto+Serif+Devanagari:wght@400;700&family=Roboto:ital,wght@0,400;0,700;1,400&family=Roboto+Mono&display=swap">
-<link rel="stylesheet" href="styles.css?v=9">
+<link rel="stylesheet" href="styles.css?v=10">
 </head>
 <body>
 
@@ -33,6 +33,7 @@
     <button class="tab file" data-act="fileMenu">File</button>
     <button class="tab active" data-tab="home">Home</button>
     <button class="tab" data-tab="insert">Insert</button>
+    <button class="tab" data-tab="design">Design</button>
     <button class="tab" data-tab="layout">Layout</button>
     <button class="tab" data-tab="review">Review</button>
     <button class="tab" data-tab="mailings">Mailings</button>
@@ -135,6 +136,7 @@
         <button class="btn" data-act="tableMenu"><i data-lucide="table"></i>Table</button>
         <button class="btn" data-act="image"><i data-lucide="image"></i>Image</button>
         <button class="btn" data-act="link" title="Ctrl+K"><i data-lucide="link"></i>Link</button>
+        <button class="btn" data-act="bookmark" title="Mark a spot you can link to"><i data-lucide="bookmark"></i>Bookmark</button>
       </div>
       <div class="group">
         <button class="btn" data-act="hr"><i data-lucide="minus"></i>Line</button>
@@ -152,6 +154,19 @@
       </div>
       <div class="group">
         <button class="btn" data-act="comment" title="Ctrl+Alt+M"><i data-lucide="message-square-plus"></i>Comment</button>
+      </div>
+    </div>
+
+    <!-- DESIGN -->
+    <div class="panel" data-panel="design">
+      <div class="group">
+        <button class="btn" data-act="themeMenu"><i data-lucide="swatch-book"></i>Themes</button>
+        <button class="btn" data-act="stylesDialog"><i data-lucide="palette"></i>Styles</button>
+      </div>
+      <div class="group">
+        <button class="btn" data-act="watermark"><i data-lucide="stamp"></i>Watermark</button>
+        <button class="btn" data-act="pageColorMenu"><i data-lucide="paint-bucket"></i>Page colour</button>
+        <button class="btn" data-act="pageBorders"><i data-lucide="square-dashed"></i>Page borders</button>
       </div>
     </div>
 
@@ -387,7 +402,7 @@
 
 <!-- ============ STATUS BAR ============ -->
 <footer class="statusbar">
-  <span id="stPages">Page 1 of 1</span>
+  <button class="st-link" id="stPages" data-act="goToPage" title="Go to page (Ctrl+G)">Page 1 of 1</button>
   <span id="stWords">0 words</span>
   <span id="stTrack"></span>
   <span id="stSave" class="hide-sm"></span>
@@ -403,8 +418,22 @@
     <input type="range" id="zoomRange" min="30" max="200" step="10" value="100" aria-label="Zoom">
     <button class="icon-btn" data-act="zoomIn" title="Zoom in"><i data-lucide="plus"></i></button>
     <span id="zoomLabel" style="width:38px;text-align:right">100%</span>
+    <button class="icon-btn" data-act="zoomFit" title="Fit page width"><i data-lucide="move-horizontal"></i></button>
   </div>
 </footer>
+
+<!-- phone toolbar: the everyday tools at your thumb; "Tools" opens the full ribbon -->
+<div class="mbar" id="mbar">
+  <button class="icon-btn" data-act="undo" title="Undo"><i data-lucide="undo-2"></i></button>
+  <button class="icon-btn" data-act="mStyle" title="Paragraph style"><i data-lucide="heading"></i></button>
+  <button class="icon-btn" data-cmd="bold" title="Bold"><i data-lucide="bold"></i></button>
+  <button class="icon-btn" data-cmd="italic" title="Italic"><i data-lucide="italic"></i></button>
+  <button class="icon-btn" data-cmd="underline" title="Underline"><i data-lucide="underline"></i></button>
+  <button class="icon-btn" data-cmd="insertUnorderedList" title="Bullets"><i data-lucide="list"></i></button>
+  <button class="icon-btn" data-cmd="insertOrderedList" title="Numbering"><i data-lucide="list-ordered"></i></button>
+  <button class="icon-btn" data-act="mAlign" title="Alignment"><i data-lucide="align-left"></i></button>
+  <button class="icon-btn" id="mTools" data-act="mTools" title="All tools"><i data-lucide="sliders-horizontal"></i></button>
+</div>
 
 <button class="btn outline exit-focus" data-act="focusMode"><i data-lucide="x"></i>Exit focus</button>
 
@@ -424,8 +453,8 @@
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/turndown-plugin-gfm@1.0.2/dist/turndown-plugin-gfm.js" defer></script>
-<script src="templates.js?v=9"></script>
-<script src="docx-import.js?v=9"></script>
-<script src="app.js?v=9"></script>
+<script src="templates.js?v=10"></script>
+<script src="docx-import.js?v=10"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>

@@ -14,7 +14,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const TAB_ID = uid('t');
-const LEKH_VERSION = 9;
+const LEKH_VERSION = 10;
 const GIST_DESC = 'Lekh documents (sync) — do not edit by hand';
 const editor = $('#editor'), page = $('#page'), pageWrap = $('#pageWrap'), canvas = $('#canvas');
 const hdr = $('#hdr'), ftr = $('#ftr');
@@ -29,7 +29,8 @@ function timeAgo(t) {
   return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 const fmtTime = t => new Date(t).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-const fmtDate = () => new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+const DATE_FMT = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+const fmtDate = () => DATE_FMT.format(new Date());
 const safeName = t => (String(t || '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '').trim() || 'document').slice(0, 120);
 
 function download(blob, name) {
@@ -53,30 +54,64 @@ function saveSettings() { try { localStorage.setItem('lekh.settings', JSON.strin
 const me = () => (settings.author || 'Me').trim() || 'Me';
 
 /* -------------------------------------------------------------- IndexedDB */
+/* Version history is kept in its own store ('vers') so that saving or syncing a long document doesn't
+   copy dozens of full old copies every time. Callers still just use d.versions; DB attaches and splits it. */
+const VCache = new Map();                                  // id -> { arr, sig }
+const vsig = a => !a || !a.length ? '0' : a.length + ':' + a[0].id + ':' + a[a.length - 1].id;
 const DB = {
   db: null,
   open() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('lekh', 1);
-      r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('docs', { keyPath: 'id' }); d.createObjectStore('kv'); };
-      r.onsuccess = () => { this.db = r.result; res(); };
+      const r = indexedDB.open('lekh', 2);
+      r.onupgradeneeded = () => {
+        const d = r.result;
+        if (!d.objectStoreNames.contains('docs')) d.createObjectStore('docs', { keyPath: 'id' });
+        if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
+        if (!d.objectStoreNames.contains('vers')) d.createObjectStore('vers', { keyPath: 'id' });
+      };
+      r.onsuccess = () => { this.db = r.result; this.db.onversionchange = () => { this.db.close(); location.reload(); }; res(); };
       r.onerror = () => rej(r.error);
     });
   },
   tx(store, mode, fn) {
     return new Promise((res, rej) => {
-      const t = this.db.transaction(store, mode); const s = t.objectStore(store); let out;
-      const r = fn(s); if (r) r.onsuccess = () => { out = r.result; };
+      const t = this.db.transaction(store, mode); const s = Array.isArray(store) ? store.map(n => t.objectStore(n)) : t.objectStore(store); let out;
+      const r = fn(s, v => { out = v; }); if (r && 'onsuccess' in r) r.onsuccess = () => { out = r.result; };
       t.oncomplete = () => res(out); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
     });
   },
-  all() { return this.tx('docs', 'readonly', s => s.getAll()); },
-  get(id) { return this.tx('docs', 'readonly', s => s.get(id)); },
-  put(d) { return this.tx('docs', 'readwrite', s => s.put(d)); },
-  del(id) { return this.tx('docs', 'readwrite', s => s.delete(id)); },
+  attach(rec, vs, done) {                                   // give a doc record its version list
+    if (!rec || Array.isArray(rec.versions)) { done && done(); return; }      // old format still holds its own
+    const c = VCache.get(rec.id);
+    if (c && c.sig === (rec.vSig || '0')) { rec.versions = c.arr; done && done(); return; }
+    if (!rec.vSig || rec.vSig === '0') { rec.versions = []; VCache.set(rec.id, { arr: rec.versions, sig: '0' }); done && done(); return; }
+    const q = vs.get(rec.id);
+    q.onsuccess = () => { const arr = (q.result && q.result.versions) || []; VCache.set(rec.id, { arr, sig: vsig(arr) }); rec.versions = arr; done && done(); };
+  },
+  all() {
+    return this.tx(['docs', 'vers'], 'readonly', ([s, vs], set) => {
+      const q = s.getAll(); q.onsuccess = () => { const list = q.result || []; list.forEach(r => this.attach(r, vs)); set(list); };
+    });
+  },
+  get(id) {
+    return this.tx(['docs', 'vers'], 'readonly', ([s, vs], set) => {
+      const q = s.get(id); q.onsuccess = () => { const r = q.result; if (r) this.attach(r, vs); set(r); };
+    });
+  },
+  put(d) {
+    const { versions, ...rest } = d;
+    const arr = Array.isArray(versions) ? versions : [];
+    const sig = vsig(arr); rest.vSig = d.vSig = sig;
+    const c = VCache.get(d.id); const writeV = !c || c.sig !== sig || c.arr !== arr;
+    return this.tx(['docs', 'vers'], 'readwrite', ([s, vs]) => {
+      s.put(rest);
+      if (writeV) { if (arr.length) vs.put({ id: d.id, versions: arr }); else vs.delete(d.id); VCache.set(d.id, { arr, sig }); }
+    });
+  },
+  del(id) { VCache.delete(id); return this.tx(['docs', 'vers'], 'readwrite', ([s, vs]) => { s.delete(id); vs.delete(id); }); },
   kvGet(k) { return this.tx('kv', 'readonly', s => s.get(k)); },
   kvSet(k, v) { return this.tx('kv', 'readwrite', s => s.put(v, k)); },
-  clear() { return Promise.all([this.tx('docs', 'readwrite', s => s.clear()), this.tx('kv', 'readwrite', s => s.clear())]); }
+  clear() { VCache.clear(); return Promise.all(['docs', 'kv', 'vers'].map(n => this.tx(n, 'readwrite', s => s.clear()))); }
 };
 
 /* ------------------------------------------------------------- sanitizing */
@@ -181,7 +216,7 @@ function makeDoc(t = {}) {
   const d = normalizeDoc({
     id: uid('d'), title: t.title || 'Untitled document', html: (t.html || '<p><br></p>').trim(),
     header: t.header || '', footer: t.footer || '',
-    page: { size: t.page?.size || 'A4', orient: t.page?.orient || 'portrait', margins: { ...(t.page?.margins || MARGINS.normal) }, ...(t.page?.w ? { w: t.page.w, h: t.page.h } : {}), ...(t.page?.valign ? { valign: t.page.valign } : {}) },
+    page: { size: t.page?.size || 'A4', orient: t.page?.orient || 'portrait', margins: { ...(t.page?.margins || MARGINS.normal) }, ...(t.page?.w ? { w: t.page.w, h: t.page.h } : {}), ...(t.page?.valign ? { valign: t.page.valign } : {}), ...Object.fromEntries(['color', 'border', 'wm', 'theme'].filter(k => t.page?.[k]).map(k => [k, JSON.parse(JSON.stringify(t.page[k]))])) },
     comments: [], versions: [], track: false, createdAt: now, updatedAt: now, ver: uid('v'),
     dirty: true, vDirty: false, base: null, deleted: false
   });
@@ -386,7 +421,7 @@ function renderCurrent({ keepScroll = true, force = false } = {}) {
   const top = canvas.scrollTop;
   if (force || cur.html !== editorSrc) {
     editor.innerHTML = sanitize(cur.html) || '<p><br></p>';
-    Img.intern(editor); editorSrc = cur.html;
+    Img.intern(editor); editorSrc = cur.html; Pager.invalidate();
   }
   if (document.activeElement !== $('#docTitle')) $('#docTitle').value = cur.title === 'Untitled document' ? '' : cur.title;
   if (document.activeElement !== hdr) hdr.innerText = cur.header || '';
@@ -423,9 +458,9 @@ async function saveNow() {
   if (!cur || !pendingSave) return;
   pendingSave = false;
   if (editor.querySelector('.toc')) updateTOCs(true);
-  cur.html = cleanHTML(); editorSrc = cur.html; cur.pristine = false;
-  cur.header = hdr.innerText.replace(/\n+$/, '');
-  cur.footer = ftr.innerText.replace(/\n+$/, '');
+  const html = cleanHTML(), header = hdr.innerText.replace(/\n+$/, ''), footer = ftr.innerText.replace(/\n+$/, '');
+  if (html === cur.html && header === (cur.header || '') && footer === (cur.footer || '')) { editorSrc = cur.html; setSaveStatus('Saved'); return; }   // nothing really changed: don't create a new version to sync
+  cur.html = html; editorSrc = html; cur.pristine = false; cur.header = header; cur.footer = footer;
   touch(cur);
   maybeAutoVersion();
   await persist(cur);
@@ -460,7 +495,8 @@ function maybeAutoVersion() {
 function addVersion(d, name, auto) {
   d.versions.unshift({ id: uid('v'), time: Date.now(), name, html: d.html, header: d.header, footer: d.footer, auto, author: me() });
   let a = 0, n = 0;
-  d.versions = d.versions.filter(v => v.auto ? ++a <= 15 : ++n <= 30);
+  let bytes = 0;   // long documents: keep auto-saves under ~4 MB in total so syncing stays quick (named versions are always kept)
+  d.versions = d.versions.filter(v => { if (!v.auto) return ++n <= 30; bytes += (v.html || '').length; return ++a <= 15 && (a <= 3 || bytes <= 4e6); });
   d.vDirty = true;
 }
 
@@ -484,7 +520,8 @@ function applyPage() {
   const preset = Object.entries(MARGINS).find(([, v]) => v.t === m.t && v.r === m.r && v.b === m.b && v.l === m.l);
   $('#selMargin').value = preset ? preset[0] : 'custom';
   $$('[data-act="orient"]').forEach(b => b.classList.toggle('on', b.dataset.v === cur.page.orient));
-  applyZoom(); Pager.run(); Ruler.render();
+  if (cur.page.color) page.style.setProperty('--paper', cur.page.color); else page.style.removeProperty('--paper');
+  applyZoom(); Pager.invalidate(); Pager.run(); Ruler.render();
 }
 
 /* ------------------------------------------------------------ pagination
@@ -494,11 +531,73 @@ function applyPage() {
    print. Spacers are stripped before every save, export and copy. */
 const Pager = {
   G: 28, timer: null, sig: '', composing: false, fnCache: new Map(), geo: null, pendingRender: false,
+  /* Incremental layout: a MutationObserver remembers the earliest edited spot; run() re-flows from
+     there and stops as soon as a later block lands exactly where it was last time (everything after it
+     is then unchanged). Long re-flows are done in slices so typing never freezes. */
+  full: true, key: '', dirtyNode: null, resumeEl: null, mustReach: null, tops: new WeakMap(), mo: null, sliceT: null,
+  invalidate() { this.full = true; },
+  watch() {
+    this.mo = new MutationObserver(recs => this.noteMut(recs));
+    this.mo.observe(editor, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['style', 'class', 'src', 'width', 'height', 'colspan', 'rowspan'] });
+  },
+  isGap: n => n && n.nodeType === 1 && n.classList.contains('pg-gap'),
+  noteMut(recs) {
+    for (const r of recs) {
+      let n = r.target;
+      if (r.type === 'childList') {
+        const all = [...r.addedNodes, ...r.removedNodes];
+        if (all.length && all.every(this.isGap)) continue;                 // our own spacers
+        if (all.length > 60) { this.full = true; continue; }
+        if (n === editor) {
+          const added = [...r.addedNodes].filter(x => x.isConnected);
+          n = added[0] || r.nextSibling || r.previousSibling;
+          if (n && !n.isConnected) n = null;
+          if (!n) { this.full = true; continue; }
+        }
+      } else if (r.type === 'attributes' && this.isGap(n)) continue;
+      if (n.nodeType === 3) n = n.parentNode;
+      if (!n || !n.isConnected || n === editor || !editor.contains(n)) { if (n === editor) this.full = true; continue; }
+      if (n.closest('.pg-gap')) continue;
+      this.markDirty(n);
+    }
+  },
+  markDirty(n) {
+    const d = this.dirtyNode;
+    if (!d || !d.isConnected || (n.compareDocumentPosition(d) & Node.DOCUMENT_POSITION_FOLLOWING)) this.dirtyNode = n;
+  },
+  indexOf(leaves, node) {                    // first leaf at or after node (leaves are in document order)
+    let lo = 0, hi = leaves.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1, el = leaves[mid].el;
+      if (el === node || el.contains(node) || (node.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) hi = mid; else lo = mid + 1;
+    }
+    return lo;
+  },
+  dropOwn(L) {                               // remove the spacers this block received last time
+    const el = L.el, prev = el.previousElementSibling;
+    if (this.isGap(prev) && !prev.previousElementSibling?.classList.contains('page-break')) prev.remove();
+    if (L.pb && this.isGap(el.nextElementSibling)) el.nextElementSibling.remove();
+    const gs = el.getElementsByClassName('pg-gap');
+    if (gs.length) {
+      const list = [...gs].filter(g => g.tagName === 'SPAN' && (!L.own || g.closest('li') === el));
+      if (list.length) { const ps = new Set(list.map(g => g.parentNode)); list.forEach(g => g.remove()); ps.forEach(x => x.normalize()); }
+    }
+  },
+  finish() { if (this.resumeEl || this.full || this.dirtyNode) { clearTimeout(this.sliceT); this.run({ sync: true }); } },
   on() { return settings.pageView === 'pages' || !settings.pageView || document.body.classList.contains('printing'); },
   printing() { return document.body.classList.contains('printing'); },
   cost: 0,
-  schedule(ms = 140) { clearTimeout(this.timer); this.timer = setTimeout(() => this.run(), Math.max(ms, Math.min(900, this.cost * 3))); },
+  pendingSince: 0,
+  schedule(ms = 80) {
+    // debounce, but while someone types non-stop still re-flow at least every ~250 ms
+    const now = performance.now();
+    if (this.timer && this.pendingSince && now - this.pendingSince > 250) return;
+    if (!this.timer) this.pendingSince = now;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => { this.timer = null; this.pendingSince = 0; this.run(); }, Math.max(ms, Math.min(900, this.cost * 3)));
+  },
   strip() {
+    this.full = true;
     const parents = new Set();
     $$('.pg-gap', editor).forEach(g => { if (g.tagName === 'SPAN' && g.parentNode) parents.add(g.parentNode); g.remove(); });
     parents.forEach(p => { if (p.isConnected) p.normalize(); });
@@ -585,12 +684,15 @@ const Pager = {
     if (this.fnCache.size > 800) this.fnCache.clear();
     this.fnCache.set(key, v); return v;
   },
-  run() {
-    clearTimeout(this.timer);
+  run({ sync = false } = {}) {
+    clearTimeout(this.timer); clearTimeout(this.sliceT); this.timer = null; this.pendingSince = 0;
     if (!cur || !DB.db) return;
     const t0 = performance.now();
     if (this.composing) { this.schedule(400); return; }
+    if (!this.mo) this.watch();
+    this.noteMut(this.mo.takeRecords());
     const pagesOn = this.on(), printing = this.printing();
+    if (printing) sync = true;
     const z = printing ? 1 : clamp(settings.zoom, 30, 200) / 100;
     const G = printing ? 0 : this.G;
     const { w, h } = pageDims(); const m = cur.page.margins;
@@ -598,7 +700,14 @@ const Pager = {
     // measure every footnote up front so the loop below never invalidates layout
     const fns = $$('sup.fn', editor);
     fns.forEach(f => this.noteHeight(f.dataset.note || '', cw));
-    this.strip();
+    const key = [z, G, w, h, m.t, m.b, m.l, m.r, pagesOn, printing, settings.pageView].join('|');
+    const va0 = cur.page.valign;
+    const incremental = pagesOn && !this.full && key === this.key && !fns.length && va0 !== 'center' && va0 !== 'bottom' && !editor.querySelector('.cols');
+    if (incremental && !this.dirtyNode && !this.resumeEl) {   // nothing changed in the text: only refresh sheets/overlays
+      this.render({ ...this.lastO, notes: new Map(), area: () => 0, fns: [] }); this.mo.takeRecords(); return;
+    }
+    if (!incremental) { this.strip(); this.tops = new WeakMap(); this.resumeEl = null; }
+    this.full = false; this.key = key;
     editor.style.minHeight = pagesOn ? (H - mT - mB) + 'px' : (H - mT - mB) + 'px';
     const base = page.getBoundingClientRect().top;
     const Y = cy => (cy - base) / z;
@@ -633,11 +742,33 @@ const Pager = {
       fit(g, () => Y(g.getBoundingClientRect().bottom), target); gapFor.set(pageAt(target), g);
     };
 
-    let lastBottom = mT;
+    let lastBottom = mT, paused = null;
     if (pagesOn) {
       const leaves = this.leaves();
-      for (let i = 0; i < leaves.length; i++) {
+      let start = 0, dirtyIdx = -1;
+      if (incremental) {
+        // restart one block before the earliest change; never stop early before both the edit and any
+        // unfinished slice from last time have been re-flowed
+        const cands = [this.dirtyNode, this.resumeEl].filter(n => n && n.isConnected).map(n => this.indexOf(leaves, n));
+        if (!cands.length) cands.push(0);
+        start = Math.max(0, Math.min(...cands) - 1);
+        const mr = this.mustReach && this.mustReach.isConnected ? this.indexOf(leaves, this.mustReach) : -1;
+        dirtyIdx = Math.max(mr, ...cands);
+      }
+      const reach = dirtyIdx;
+      this.dirtyNode = null; this.resumeEl = null;
+      const viewBottom = Y(canvas.getBoundingClientRect().bottom) + 200;
+      const budget = sync ? Infinity : 24;
+      for (let i = start; i < leaves.length; i++) {
         const L = leaves[i]; const el = L.el; if (!el.isConnected) continue;
+        if (incremental) {
+          if (i > dirtyIdx) {
+            const old = this.tops.get(el);
+            if (old != null && Math.abs(Y(el.getBoundingClientRect().top) - old) < 0.5) break;   // converged: the rest is unchanged
+          }
+          if (performance.now() - t0 > budget && i > start + 1 && Y(el.getBoundingClientRect().top) > viewBottom) { paused = el; break; }
+          this.dropOwn(L);
+        } else if (performance.now() - t0 > budget && i > 1 && Y(el.getBoundingClientRect().top) > viewBottom) { paused = el; break; }
         const refs = $$('sup.fn', el).filter(f => !L.own || f.closest('li') === el);
         for (let guard = 0; guard < 300; guard++) {
           refs.forEach(remN);
@@ -683,7 +814,14 @@ const Pager = {
           }
           if (!acted) { lastBottom = Math.max(lastBottom, lines[lines.length - 1].bottom, bottom); lines.forEach(l => use(pageOf(l.top), l.bottom)); break; }
         }
+        if (el.isConnected) this.tops.set(el, Y(el.getBoundingClientRect().top));
       }
+      if (paused) {
+        // remember how far an unfinished re-flow still has to go, even if the next slice restarts earlier
+        const pi = leaves.findIndex(L => L.el === paused);
+        const far = reach > pi && leaves[reach] ? leaves[reach].el : paused;
+        this.resumeEl = paused; this.mustReach = far; this.full = false;
+      } else this.mustReach = null;
       const kids = [...editor.children].filter(c => !c.classList.contains('pg-gap'));
       const lk = kids[kids.length - 1];
       if (lk) lastBottom = Math.max(lastBottom, Y(lk.getBoundingClientRect().bottom));
@@ -715,20 +853,28 @@ const Pager = {
     page.style.height = total + 'px';
     this.geo = { H, G, z, mT, mB, pagesOn };
     stats.pages = N; renderStatus();
+    this.lastO = { N, H, G, mT, mB, mL, mR, total, contentH, pagesOn };
     this.render({ N, H, G, mT, mB, mL, mR, total, notes, area, contentH, pagesOn, fns });
-    if (panelMode === 'find') Find.build();
-    this.cost = performance.now() - t0;
+    if (panelMode === 'find' && !paused) Find.build();
+    this.mo.takeRecords();                    // our own spacer changes are not edits
+    this.cost = paused || !incremental ? Math.min(40, performance.now() - t0) : performance.now() - t0;   // a one-off full re-flow shouldn't slow later typing
+    if (paused) this.sliceT = setTimeout(() => this.run(), 16);
   },
   render(o) {
-    const resolve = (t, k) => t.replace(/\{page\}/g, k + 1).replace(/\{pages\}/g, o.N).replace(/\{title\}/g, cur.title).replace(/\{date\}/g, fmtDate());
+    const today = fmtDate();
+    const resolve = (t, k) => t.indexOf('{') < 0 ? t : t.replace(/\{page\}/g, k + 1).replace(/\{pages\}/g, o.N).replace(/\{title\}/g, cur.title).replace(/\{date\}/g, today);
     const H_ = hdr.innerText.replace(/\n+$/, ''), F_ = ftr.innerText.replace(/\n+$/, '');
     const idx = new Map(o.fns.map((f, i) => [f, i + 1]));
     const pages = o.pagesOn ? o.N : 1;
     let sheets = '', ov = '';
+    const pb = cur.page.border, wm = cur.page.wm && cur.page.wm.text ? cur.page.wm : null;
+    const pbOff = pb ? (pb.off ?? 24) * 96 / 72 : 0, Wpx = pageDims().w * 96;
+    const wmFs = wm ? Math.round(Math.min(o.H * 0.16, (wm.diag !== false ? Math.hypot(Wpx, o.H) * 0.7 : Wpx * 0.85) / (0.62 * Math.max(3, wm.text.length)))) : 0;
     for (let k = 0; k < pages; k++) {
       const top = k * (o.H + o.G), hgt = o.pagesOn ? o.H : o.total;
       sheets += `<div class="sheet" style="top:${top}px;height:${hgt}px"></div>`;
-      if (settings.ruler && (o.pagesOn || k === 0)) ov += Ruler.vruler(top, hgt, o.mT, o.mB);
+      if (wm) sheets += `<div class="pg-wm${wm.diag !== false ? ' diag' : ''}" style="top:${top}px;height:${o.pagesOn ? o.H : Math.min(o.H, hgt)}px;color:${esc(wm.color || '#c3c8d1')};font-size:${wmFs}px"><span>${esc(wm.text)}</span></div>`;
+      if (pb && pb.style !== 'none') sheets += `<div class="pg-border" style="top:${top + pbOff}px;left:${pbOff}px;right:${pbOff}px;height:${hgt - 2 * pbOff}px;border:${pb.style === 'double' ? Math.max(3, pb.w || 3) : pb.style === 'thick' ? Math.max(3, pb.w || 4.5) : (pb.w || 1)}pt ${pb.style === 'thick' ? 'solid' : pb.style} ${esc(pb.color || '#1c2230')}"></div>`;
       const pad = `padding:0 ${o.mR}px 0 ${o.mL}px`;
       if (H_ || k === 0) ov += `<div class="ov-hf h${k === 0 ? ' p0' : ''}" data-hf="h" style="top:${top}px;height:${o.mT}px;${pad}"><span>${esc(resolve(H_, k))}</span></div>`;
       if (F_ || k === 0) ov += `<div class="ov-hf f${k === 0 ? ' p0' : ''}" data-hf="f" style="top:${top + hgt - o.mB}px;height:${o.mB}px;${pad}"><span>${esc(resolve(F_, k))}</span></div>`;
@@ -741,11 +887,31 @@ const Pager = {
       }
     }
     $('#pageFooter').style.top = (o.pagesOn ? o.H - o.mB : o.total - o.mB) + 'px';
+    this.placeVRuler(o);
     const sig = sheets + ov;
     if (sig === this.sig) return;
     if ($('#overlays').contains(document.activeElement)) { this.pendingRender = true; $('#sheets').innerHTML = sheets; return; }
     this.sig = sig; this.pendingRender = false;
     $('#sheets').innerHTML = sheets; $('#overlays').innerHTML = ov;
+  },
+  /* one vertical ruler, on the page you're working on (like Word) instead of one per page */
+  placeVRuler(o = this.lastO) {
+    if (!o) return;
+    let el = $('#vruler');
+    if (!settings.ruler) { if (el) el.remove(); return; }
+    if (!el) { el = document.createElement('div'); el.id = 'vruler'; page.appendChild(el); }
+    const hgt = o.pagesOn ? o.H : o.total, gk = [hgt, o.mT, o.mB, settings.units].join('|');
+    if (el.dataset.g !== gk) { el.innerHTML = Ruler.vruler(0, hgt, o.mT, o.mB); el.dataset.g = gk; }
+    let k = 0;
+    if (o.pagesOn) {
+      const z = this.geo?.z || 1, base = page.getBoundingClientRect().top;
+      const r = selRange(); let y;
+      const rr = r && editor.contains(r.startContainer) ? (r.getClientRects()[0] || r.startContainer.parentElement?.getBoundingClientRect?.()) : null;
+      if (rr && rr.bottom > 0 && rr.top < innerHeight) y = rr.top; else { const cr = canvas.getBoundingClientRect(); y = cr.top + cr.height / 3; }
+      k = clamp(Math.floor(((y - base) / z) / (o.H + o.G)), 0, o.N - 1);
+    }
+    const t = (o.pagesOn ? k * (o.H + o.G) : 0) + 'px';
+    if (el.style.top !== t) el.style.top = t;
   },
   focusNote(fid) {
     const el = $(`#overlays .fn-text[data-fid="${CSS.escape(fid)}"]`); if (!el) return;
@@ -754,18 +920,18 @@ const Pager = {
   }
 };
 function scheduleGuides() { Pager.schedule(); }
-let rulerT = null; function rulerSoon() { if (Ruler.drag) return; cancelAnimationFrame(rulerT); rulerT = requestAnimationFrame(() => Ruler.render()); }
+let rulerT = null; function rulerSoon() { if (Ruler.drag) return; cancelAnimationFrame(rulerT); rulerT = requestAnimationFrame(() => { Ruler.render(); Pager.placeVRuler(); }); }
 editor.addEventListener('compositionstart', () => { Pager.composing = true; });
 editor.addEventListener('compositionend', () => { Pager.composing = false; Pager.schedule(); });
-editor.addEventListener('load', e => { if (e.target.tagName === 'IMG') Pager.schedule(60); }, true);
-if (document.fonts) { document.fonts.addEventListener?.('loadingdone', () => Pager.schedule(30)); document.fonts.ready.then(() => Pager.schedule(30)); }
+editor.addEventListener('load', e => { if (e.target.tagName === 'IMG') { Pager.markDirty(e.target); Pager.schedule(60); } }, true);
+if (document.fonts) { document.fonts.addEventListener?.('loadingdone', () => { Pager.invalidate(); Pager.schedule(30); }); document.fonts.ready.then(() => { Pager.invalidate(); Pager.schedule(30); }); }
 window.addEventListener('beforeprint', () => {
   if (!cur) return;
   selectImage(null); if (pendingSave) saveNow();
   const { w, h } = pageDims();
   let s = $('#printStyle'); if (!s) { s = document.createElement('style'); s.id = 'printStyle'; document.head.appendChild(s); }
   s.textContent = `@page { size: ${w}in ${h}in; margin: 0; }`;
-  document.body.classList.add('printing'); applyZoom(); Pager.run();
+  document.body.classList.add('printing'); applyZoom(); Pager.run({ sync: true });
 });
 window.addEventListener('afterprint', () => { document.body.classList.remove('printing'); applyZoom(); Pager.run(); });
 
@@ -773,6 +939,8 @@ window.addEventListener('afterprint', () => { document.body.classList.remove('pr
 function applyZoom() {
   const z = clamp(settings.zoom, 30, 200) / 100;
   pageWrap.style.zoom = document.body.classList.contains('printing') ? 1 : z;
+  // keep the ruler flush under the toolbar when scrolling (sticky offsets are scaled by zoom)
+  const hr = $('#hRuler'); if (hr) hr.style.top = (-(parseFloat(getComputedStyle(canvas).paddingTop) || 0) / z) + 'px';
   $('#zoomRange').value = settings.zoom; $('#zoomLabel').textContent = settings.zoom + '%';
 }
 function setZoom(v) { settings.zoom = Math.round(clamp(v, 30, 200)); saveSettings(); applyZoom(); hideFloatbars(); Pager.schedule(60); }
@@ -1022,7 +1190,7 @@ function insertAtom(el) {          // insert a non-editable inline element (foot
   const nr = document.createRange(); nr.setStartAfter(el); nr.collapse(true); setRange(nr);
   markChanged();
 }
-function atom(tag, cls, data) { const e = document.createElement(tag); e.className = cls; e.setAttribute('contenteditable', 'false'); Object.entries(data).forEach(([k, v]) => { e.dataset[k] = v; }); return e; }
+function atom(tag, cls, data, attrs = {}) { const e = document.createElement(tag); e.className = cls; e.setAttribute('contenteditable', 'false'); Object.entries(data).forEach(([k, v]) => { e.dataset[k] = v; }); Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v)); return e; }
 function insertHTMLAtCaret(html) {
   restoreSel(); History.push('ins', true);
   document.execCommand('insertHTML', false, html);
@@ -1149,7 +1317,7 @@ async function toggleTrack(force) {
   applyTrackUI(); await commitMeta();
   toast(cur.track ? 'Track changes on — edits are marked' : 'Track changes off');
 }
-function applyTrackUI() {
+function applyTrackUI() { Pager.invalidate();
   $('#btnTrack').classList.toggle('on', !!cur?.track);
   $('#stTrack').innerHTML = cur?.track ? '<span class="tc-on">● Tracking changes</span>' : '';
   editor.classList.toggle('final-view', !settings.markup);
@@ -1694,13 +1862,63 @@ function updateTOCs(silent) {
   if (!silent) { markChanged(); toast('Contents updated'); }
 }
 
+/* ---------------------------------------------------------- bookmarks & places in the document */
+const bmName = s => { let n = String(s || '').trim().replace(/\s+/g, '_').replace(/[^\p{L}\p{N}_]/gu, ''); if (!/^\p{L}/u.test(n)) n = 'B' + n; return n.slice(0, 40); };
+function docPlaces() {
+  const out = [];
+  $$('h1, h2, h3, p.title', editor).filter(h => !h.closest('.toc') && h.textContent.trim()).forEach(h => {
+    const lvl = h.tagName === 'P' ? 0 : +h.tagName[1]; const t = h.textContent.trim().slice(0, 70);
+    out.push({ el: h, text: t, label: (lvl > 1 ? '\u00a0\u00a0'.repeat(lvl - 1) : '') + (lvl ? '¶ ' : '★ ') + t, get key() { return h.id ? '#' + h.id : 'h:' + out.indexOf(this); }, ensure() { if (!h.id) h.id = 'h-' + Math.random().toString(36).slice(2, 9); } });
+  });
+  $$('.bm', editor).forEach(b => out.push({ el: b, text: b.dataset.bm, label: '⚑ ' + b.dataset.bm, key: '#' + b.id, ensure() {} }));
+  return out;
+}
+function goToAnchor(id) {
+  let el = null; try { el = editor.querySelector('#' + CSS.escape(id)); } catch {}
+  if (!el && id.startsWith('bm-')) el = $$('.bm', editor).find(b => b.dataset.bm === id.slice(3));
+  if (!el) { toast('That place is no longer in the document'); return; }
+  Pager.finish();
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  editor.focus({ preventScroll: true });
+  const r = document.createRange();
+  if (el.classList.contains('bm')) { r.setStartAfter(el); r.collapse(true); } else { r.selectNodeContents(el); r.collapse(true); }
+  setRange(r);
+  el.classList.add('flash-target'); setTimeout(() => el.classList.remove('flash-target'), 1400);
+}
+async function bookmarkDialog() {
+  if (!cur) return;
+  const r0 = selRange() || lastRange;
+  const list = $$('.bm', editor);
+  const body = document.createElement('div');
+  body.innerHTML = `<div class="field"><label for="bmName">Bookmark name</label><input id="bmName" autocomplete="off" placeholder="e.g. Chapter_3_start"><div class="hint">Letters, numbers and _ only (spaces become _). It marks the spot where your cursor is.</div></div>
+    ${list.length ? `<div class="field"><label>Bookmarks in this document</label><div class="bm-list">${list.map(b => `<div class="bm-row"><span>⚑ ${esc(b.dataset.bm)}</span><button type="button" class="btn small outline" data-go="${esc(b.id)}">Go to</button><button type="button" class="btn small outline danger" data-del="${esc(b.id)}">Delete</button></div>`).join('')}</div></div>` : ''}`;
+  body.addEventListener('click', e => {
+    const g = e.target.closest('[data-go]'), d = e.target.closest('[data-del]');
+    if (g) { closeModal(null); goToAnchor(g.dataset.go); }
+    if (d) { const el = editor.querySelector('#' + CSS.escape(d.dataset.del)); if (el) { History.push('bm', true); el.remove(); markChanged(); } d.closest('.bm-row').remove(); }
+  });
+  const name = await modal({ title: 'Bookmark', body, buttons: [{ label: 'Close', value: null }, { label: 'Add bookmark', primary: true, value: () => $('#bmName').value }] });
+  if (!name || !name.trim()) return;
+  const n = bmName(name);
+  if (editor.querySelector('#' + CSS.escape('bm-' + n))) { toast(`A bookmark called “${n}” already exists`, { err: true }); return; }
+  if (r0) { editor.focus({ preventScroll: true }); const rr = r0.cloneRange(); rr.collapse(true); setRange(rr); }
+  History.push('bm', true);
+  insertAtom(atom('span', 'bm', { bm: n }, { id: 'bm-' + n }));
+  markChanged(); toast(`Bookmark “${n}” added — link to it with Insert → Link`);
+}
+
 async function linkDialog(existing) {
   const r0 = selRange() || lastRange; const a = existing || closestEl(r0?.startContainer, 'a');
   const text = a ? a.textContent : (r0 ? r0.toString() : '');
+  const places = docPlaces();
+  const cur0 = a ? a.getAttribute('href') : '';
   const res = await promptDialog(a ? 'Edit link' : 'Insert link', [
-    { name: 'url', label: 'Address', value: a ? a.getAttribute('href') : '', placeholder: 'https://…' },
+    { name: 'place', label: 'Place in this document', type: 'select', value: places.some(p => p.key === cur0) ? cur0 : '', options: [['', places.length ? '— a web address (below) —' : '— no headings or bookmarks yet —'], ...places.map(p => [p.key, p.label])] },
+    { name: 'url', label: 'Web address', value: cur0.startsWith('#') ? '' : cur0, placeholder: 'https://…' },
     { name: 'text', label: 'Text to display', value: text }], a ? 'Save' : 'Insert');
-  if (!res || !res.url.trim()) return;
+  if (!res) return;
+  if (res.place) { const pl = places.find(p => p.key === res.place); if (pl) { pl.ensure(); res.url = '#' + pl.el.id; if (!res.text && !text) res.text = pl.text; } }
+  if (!res.url.trim()) return;
   let url = res.url.trim();
   if (/^\s*(javascript|data|vbscript):/i.test(url)) { toast('That kind of link is not allowed', { err: true }); return; }
   if (!/^(https?:|mailto:|tel:|#|\/)/i.test(url)) url = (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(url) ? 'mailto:' : 'https://') + url;
@@ -1940,7 +2158,8 @@ editor.addEventListener('click', e => {
   if (tocA) { e.preventDefault(); const h = document.getElementById(tocA.getAttribute('href').slice(1)); h && h.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
   const a = e.target.closest('a');
   if (a && editor.contains(a)) {
-    if (e.ctrlKey || e.metaKey) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); return; }
+    const internal = (a.getAttribute('href') || '').startsWith('#');
+    if (e.ctrlKey || e.metaKey) { e.preventDefault(); if (internal) goToAnchor(a.getAttribute('href').slice(1)); else window.open(a.href, '_blank', 'noopener'); return; }
     selLink = a; $('#linkHref').textContent = a.getAttribute('href'); $('#linkOpen').href = a.href;
     placeBar($('#linkBar'), a.getBoundingClientRect(), false);
   } else $('#linkBar').classList.remove('show');
@@ -1954,6 +2173,7 @@ document.addEventListener('selectionchange', () => {
   if (r) { lastRange = r.cloneRange(); updateToolbar(); refreshTableBar(); refreshTableTab(); paintCellSel(); Nav.mark(); rulerSoon(); }
 });
 editor.addEventListener('blur', () => setTimeout(() => { if (!document.activeElement || !$('#tableBar').contains(document.activeElement)) refreshTableBar(); }, 150));
+let vrT = 0; canvas.addEventListener('scroll', () => { if (!vrT) vrT = requestAnimationFrame(() => { vrT = 0; Pager.placeVRuler(); }); }, { passive: true });
 canvas.addEventListener('scroll', () => { if (selImg) { placeBar($('#imageBar'), selImg.getBoundingClientRect(), false); placeHandle(); } }, { passive: true });
 [hdr, ftr].forEach(f => {
   f.addEventListener('input', markChanged);
@@ -1962,7 +2182,7 @@ canvas.addEventListener('scroll', () => { if (selImg) { placeBar($('#imageBar'),
 });
 
 /* toolbar wiring: keep editor selection when clicking buttons */
-$$('.ribbon button, .floatbar button, .floatbar a').forEach(b => b.addEventListener('mousedown', e => { if (!b.closest('.tabs')) e.preventDefault(); }));
+$$('.ribbon button, .floatbar button, .floatbar a, .mbar button').forEach(b => b.addEventListener('mousedown', e => { if (!b.closest('.tabs')) e.preventDefault(); }));
 $$('[data-cmd]').forEach(b => b.addEventListener('click', () => {
   const c = b.dataset.cmd;
   if (c === 'insertUnorderedList') toggleList('UL'); else if (c === 'insertOrderedList') toggleList('OL'); else exec(c);
@@ -1984,6 +2204,10 @@ $('#pShadeColor').addEventListener('change', e => applyShade(e.target.value));
 $('#shadeColor').addEventListener('input', e => { $('#shadeSwatch').style.background = e.target.value; });
 $('#shadeColor').addEventListener('change', () => tableOp('shade'));
 $$('[data-img]').forEach(b => b.addEventListener('click', () => imageOp(b.dataset.img)));
+$('#linkOpen').addEventListener('click', e => {
+  const h = selLink && selLink.getAttribute('href') || '';
+  if (h.startsWith('#')) { e.preventDefault(); $('#linkBar').classList.remove('show'); goToAnchor(h.slice(1)); }
+});
 $$('[data-lnk]').forEach(b => b.addEventListener('click', () => {
   if (!selLink) return;
   if (b.dataset.lnk === 'edit') linkDialog(selLink);
@@ -2005,7 +2229,7 @@ $('#selPage').addEventListener('change', async e => {
   } else { cur.page.size = e.target.value; delete cur.page.w; delete cur.page.h; }
   applyPage(); await commitMeta();
 });
-$('#selVAlign').addEventListener('change', async e => { cur.page.valign = e.target.value === 'top' ? undefined : e.target.value; if (!cur.page.valign) delete cur.page.valign; Pager.run(); await commitMeta(); });
+$('#selVAlign').addEventListener('change', async e => { cur.page.valign = e.target.value === 'top' ? undefined : e.target.value; if (!cur.page.valign) delete cur.page.valign; Pager.invalidate(); Pager.run(); await commitMeta(); });
 $('#selMargin').addEventListener('change', async e => {
   if (e.target.value === 'custom') {
     const m = cur.page.margins;
@@ -2124,7 +2348,7 @@ function mmValue(row, field) {
   let i = d.fields.indexOf(field); if (i < 0) i = d.fields.findIndex(f => f.toLowerCase() === String(field).toLowerCase());
   return i < 0 ? '' : (row[i] ?? '');
 }
-function mmApply() {
+function mmApply() { Pager.invalidate();
   const d = mmData();
   if (MM.preview && !d) MM.preview = false;
   const row = d ? d.rows[clamp(MM.idx, 0, Math.max(0, d.rows.length - 1))] || [] : [];
@@ -2437,7 +2661,7 @@ function styleCSS(d = cur) {
   }
   return css;
 }
-function applyDocStyles() { let el = $('#docStyles'); if (!el) { el = document.createElement('style'); el.id = 'docStyles'; document.head.appendChild(el); } el.textContent = styleCSS(); }
+function applyDocStyles() { Pager.invalidate(); let el = $('#docStyles'); if (!el) { el = document.createElement('style'); el.id = 'docStyles'; document.head.appendChild(el); } el.textContent = styleCSS(); }
 async function stylesDialog() {
   const st = fullStyles();
   const fontOpts = (v, allowSame) => (allowSame ? `<option value="" ${!v ? 'selected' : ''}>Same as Normal</option>` : '') + FONTS.map(([n, f]) => `<option value="${esc(f)}" ${f === v ? 'selected' : ''}>${esc(n)}</option>`).join('');
@@ -2747,7 +2971,7 @@ async function sortDialog() {
   sorted.forEach(b => anchor.before(b)); anchor.remove();
   markChanged(); Pager.schedule(30);
 }
-function toggleMarks() { settings.marks = !settings.marks; saveSettings(); editor.classList.toggle('show-marks', settings.marks); $('#btnMarks').classList.toggle('on', settings.marks); Pager.schedule(30); }
+function toggleMarks() { Pager.invalidate(); settings.marks = !settings.marks; saveSettings(); editor.classList.toggle('show-marks', settings.marks); $('#btnMarks').classList.toggle('on', settings.marks); Pager.schedule(30); }
 function setListStyle(kind, val) {
   restoreSel(); let li = closestEl(selNode(), 'li');
   const want = kind === 'ul' ? 'UL' : 'OL';
@@ -2900,45 +3124,196 @@ document.addEventListener('keydown', e => {
 function multiPages(perRow) {
   if (!cur) return;
   if (settings.pageView !== 'pages') setView('pages');
-  Pager.run();
+  Pager.finish();
   const mv = $('#multi'); const g = Pager.geo; const n = $$('#sheets .sheet').length; const { w } = pageDims(); const W = w * 96;
   const cr = canvas.getBoundingClientRect(); Object.assign(mv.style, { left: cr.left + 'px', top: cr.top + 'px', width: cr.width + 'px', height: cr.height + 'px' });
   perRow = perRow || settings.multiPer || 2; settings.multiPer = perRow; saveSettings();
-  const s = Math.min(1, (cr.width - 44 - (perRow - 1) * 22) / (perRow * W));
-  const max = Math.min(n, 60);
-  const proto = page.cloneNode(true);
-  const ec = proto.querySelector('[contenteditable="true"]');
-  $$('[id]', proto).forEach(x => x.removeAttribute('id')); $$('[contenteditable]', proto).forEach(x => x.removeAttribute('contenteditable'));
-  if (ec) ec.id = 'editor';          // keep the document styles (they are scoped to #editor)
-  $$('.ruler-v, .hf-field, .page-header, .page-footer', proto).forEach(x => x.remove());
-  proto.querySelector('.overlays')?.querySelectorAll('.ov-hf.p0').forEach(x => x.style.visibility = 'visible');
-  mv.innerHTML = `<div class="multi-bar"><b>${n} page${n > 1 ? 's' : ''}</b><span class="hint">click a page to edit it</span><div class="spacer"></div>
+  mv.innerHTML = `<div class="multi-bar"><b>${n} page${n > 1 ? 's' : ''}</b><span class="hint">click anywhere on a page to edit there</span><div class="spacer"></div>
     ${[1, 2, 3, 4].map(k => `<button class="btn small ${k === perRow ? 'on' : 'outline'}" data-per="${k}">${k} per row</button>`).join('')}
     <button class="btn small primary" data-close><i data-lucide="x"></i>Close</button></div><div class="multi-grid"></div>`;
-  const grid = $('.multi-grid', mv);
-  for (let k = 0; k < max; k++) {
-    const box = document.createElement('div'); box.className = 'mp'; box.dataset.k = k;
-    box.style.width = W * s + 'px'; box.style.height = g.H * s + 'px';
-    const inner = document.createElement('div'); inner.className = 'inner';
-    inner.style.transform = `scale(${s}) translateY(${-k * (g.H + g.G)}px)`;
-    const c = proto.cloneNode(true); c.style.margin = '0'; c.classList.add('page'); c.removeAttribute('id');
-    c.querySelectorAll('.sheet').forEach(x => { x.style.boxShadow = 'none'; });
-    inner.appendChild(c); box.appendChild(inner);
-    const num = document.createElement('span'); num.className = 'mp-num'; num.textContent = k + 1; box.appendChild(num);
-    grid.appendChild(box);
-  }
-  if (n > max) grid.insertAdjacentHTML('beforeend', `<div class="hint" style="width:100%;text-align:center">Showing the first ${max} of ${n} pages</div>`);
   mv.classList.add('show'); icons();
   $('#vMulti').classList.add('on');
+  const grid = $('.multi-grid', mv);
+  // fit exactly perRow pages across the space that is really available (minus scrollbar, padding and gaps)
+  const avail = mv.clientWidth - 44 - (perRow - 1) * 22 - 2;
+  const s = Math.min(1, avail / (perRow * W));
+  grid.style.maxWidth = Math.ceil(perRow * W * s + (perRow - 1) * 22 + 44 + 1) + 'px';
+  // where each top-level block sits, so a page thumbnail only copies the few blocks on that page
+  const base = page.getBoundingClientRect().top, z = g.z;
+  const blocks = [...editor.children].filter(c => !c.classList.contains('pg-gap')).map(el => { const r = el.getBoundingClientRect(); return { el, top: (r.top - base) / z, bottom: (r.bottom - base) / z }; });
+  const shell = page.cloneNode(false); shell.removeAttribute('id'); shell.classList.add('page');
+  const ovAll = $('#overlays').innerHTML;
+  const draw = box => {
+    if (box.dataset.drawn) return; box.dataset.drawn = '1';
+    const k = +box.dataset.k, y0 = k * (g.H + g.G), y1 = y0 + g.H;
+    const inner = document.createElement('div'); inner.className = 'inner';
+    const c = shell.cloneNode(false); c.style.margin = '0'; c.style.height = g.H + 'px'; c.style.overflow = 'hidden';
+    const sheets = document.createElement('div'); sheets.className = 'sheets'; c.appendChild(sheets);
+    for (const x of $('#sheets').children) {          // the page itself plus its watermark / border
+      const t = parseFloat(x.style.top) || 0; if (t < y0 - 1 || t >= y1) continue;
+      const cl = x.cloneNode(true); cl.style.top = (t - y0) + 'px'; if (cl.classList.contains('sheet')) cl.style.boxShadow = 'none'; sheets.appendChild(cl);
+    }
+    const ov = document.createElement('div'); ov.className = 'overlays'; ov.innerHTML = ovAll;
+    [...ov.children].forEach(x => { const t = parseFloat(x.style.top) || 0; if (t < y0 - 1 || t >= y1) x.remove(); else x.style.top = (t - y0) + 'px'; });
+    ov.querySelectorAll('.ov-hf.p0').forEach(x => x.style.visibility = 'visible');
+    const ed = document.createElement('div'); ed.className = editor.className; ed.id = 'editor';   // same document styles
+    ed.style.cssText = 'position:relative';
+    const mine = blocks.filter(b => b.bottom > y0 && b.top < y1);
+    mine.forEach(b => ed.appendChild(b.el.cloneNode(true)));
+    $$('[contenteditable]', ed).forEach(x => x.removeAttribute('contenteditable'));
+    $$('[id]', ed).forEach(x => { if (x !== ed) x.removeAttribute('id'); });
+    c.appendChild(ov); c.appendChild(ed);
+    inner.style.transform = `scale(${s})`; inner.appendChild(c); box.prepend(inner);
+    if (mine.length) {                        // line the copied blocks up with where they sit on the real page
+      const want = mine[0].top - y0, got = ed.firstElementChild.getBoundingClientRect().top - c.getBoundingClientRect().top;
+      ed.style.top = (want - got / s) + 'px';
+    }
+  };
+  const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) draw(e.target); }), { root: mv, rootMargin: '600px 0px' });
+  for (let k = 0; k < n; k++) {
+    const box = document.createElement('div'); box.className = 'mp'; box.dataset.k = k;
+    box.style.width = W * s + 'px'; box.style.height = g.H * s + 'px';
+    const num = document.createElement('span'); num.className = 'mp-num'; num.textContent = k + 1; box.appendChild(num);
+    grid.appendChild(box); io.observe(box);
+  }
+  // open on the page you were looking at
+  const curK = clamp(Math.floor((((canvas.getBoundingClientRect().top + 80) - base) / z) / (g.H + g.G)), 0, n - 1);
+  const target = grid.children[curK]; if (target) mv.scrollTop = Math.max(0, target.offsetTop - 60);
+  const close = () => { io.disconnect(); mv.classList.remove('show'); mv.innerHTML = ''; $('#vMulti').classList.remove('on'); };
   mv.onclick = e => {
-    const per = e.target.closest('[data-per]'); if (per) { multiPages(+per.dataset.per); return; }
-    const close = () => { mv.classList.remove('show'); mv.innerHTML = ''; $('#vMulti').classList.remove('on'); };
+    const per = e.target.closest('[data-per]'); if (per) { io.disconnect(); multiPages(+per.dataset.per); return; }
     if (e.target.closest('[data-close]')) { close(); return; }
     const box = e.target.closest('.mp'); if (!box) return;
-    close(); canvas.scrollTop = (+box.dataset.k) * (g.H + g.G) * (settings.zoom / 100);
+    // remember where on the page you clicked, then put the cursor at that exact spot in the normal view
+    const br = box.getBoundingClientRect(); const fx = (e.clientX - br.left) / br.width, fy = (e.clientY - br.top) / br.height;
+    const k = +box.dataset.k; close();
+    const zz = settings.zoom / 100, pr = page.getBoundingClientRect(), cr2 = canvas.getBoundingClientRect();
+    const yOnPage = k * (g.H + g.G) + fy * g.H;
+    canvas.scrollTop += (pr.top + yOnPage * zz) - (cr2.top + cr2.height / 2);
+    requestAnimationFrame(() => {
+      const pr2 = page.getBoundingClientRect();
+      const x = pr2.left + fx * W * zz, y = pr2.top + yOnPage * zz;
+      const r = document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;
+      editor.focus({ preventScroll: true });
+      if (r && editor.contains(r.startContainer) && !r.startContainer.parentElement?.closest('.pg-gap')) { setRange(r); }
+      else { const blk = blocks.find(b => b.bottom > yOnPage) || blocks[blocks.length - 1]; if (blk?.el.isConnected) { const rr = document.createRange(); rr.selectNodeContents(blk.el); rr.collapse(true); setRange(rr); } }
+      updateToolbar();
+    });
   };
+  mv.onkeydown = e => { if (e.key === 'Escape') close(); };
 }
 window.addEventListener('resize', () => { if ($('#multi').classList.contains('show')) multiPages(); });
+
+/* ============================================== Design: themes, page colour, watermark, page borders */
+const THEMES = [
+  { id: 'office', name: 'Office', body: 'Calibri, Carlito, sans-serif', head: 'Calibri, Carlito, sans-serif', c1: '#1f3864', c2: '#2f5496', text: '#1c2230' },
+  { id: 'classic', name: 'Classic', body: 'Cambria, Georgia, serif', head: 'Cambria, Georgia, serif', c1: '#1c1c1c', c2: '#3d3d3d', text: '#1c1c1c' },
+  { id: 'book', name: 'Book', body: "'EB Garamond', Garamond, serif", head: "'EB Garamond', Garamond, serif", c1: '#5a1f1f', c2: '#7a3b2e', text: '#2a2522' },
+  { id: 'modern', name: 'Modern', body: 'Inter, sans-serif', head: 'Inter, sans-serif', c1: '#0f766e', c2: '#0e7490', text: '#1f2937' },
+  { id: 'elegant', name: 'Elegant', body: 'Lora, serif', head: 'Lora, serif', c1: '#6d28d9', c2: '#7c3aed', text: '#27272a' },
+  { id: 'news', name: 'Newsprint', body: 'Merriweather, serif', head: 'Roboto, sans-serif', c1: '#111827', c2: '#b91c1c', text: '#111827' },
+  { id: 'formal', name: 'Formal', body: "'Times New Roman', Times, serif", head: "'Times New Roman', Times, serif", c1: '#000000', c2: '#000000', text: '#000000' },
+  { id: 'type', name: 'Typewriter', body: "'Courier New', Courier, monospace", head: "'Courier New', Courier, monospace", c1: '#111111', c2: '#333333', text: '#111111' },
+  { id: 'hindi', name: 'हिन्दी (Devanagari)', body: "'Noto Serif Devanagari', serif", head: "'Noto Sans Devanagari', sans-serif", c1: '#9a3412', c2: '#c2410c', text: '#1c1917' }
+];
+async function applyTheme(t) {
+  if (!cur) return;
+  cur.styles = cur.styles || {};
+  const set = (k, o) => { cur.styles[k] = { ...(cur.styles[k] || {}), ...o }; };
+  set('normal', { font: t.body, color: t.text });
+  set('title', { font: t.head, color: t.c1 }); set('subtitle', { font: t.head, color: t.c2 });
+  set('h1', { font: t.head, color: t.c1 }); ['h2', 'h3', 'h4'].forEach(k => set(k, { font: t.head, color: t.c2 }));
+  set('quote', { font: t.body });
+  cur.page.theme = t.id;
+  applyDocStyles(); Pager.run(); Ruler.render(); await commitMeta(); toast(`Theme: ${t.name}`);
+}
+function themeMenu(el) {
+  const items = THEMES.map(t => {
+    const b = document.createElement('button'); b.className = 'theme-item' + (cur?.page.theme === t.id ? ' on' : '');
+    b.innerHTML = `<span class="th-swatch"><i style="background:${t.c1}"></i><i style="background:${t.c2}"></i><i style="background:${t.text}"></i></span>
+      <span class="th-text"><b style="font-family:${esc(t.head)};color:${t.c1}">${esc(t.name)}</b><small style="font-family:${esc(t.body)}">Heading and body text</small></span>`;
+    b.onmousedown = e => e.preventDefault(); b.onclick = () => { hideMenu(); applyTheme(t); };
+    return { node: b };
+  });
+  showMenu(el, [{ header: 'Fonts and colours for the whole document' }, ...items, 'sep', { icon: 'palette', label: 'Fine-tune styles…', act: () => stylesDialog() }]);
+}
+async function setPageColor(c) { if (!cur) return; if (c) cur.page.color = c; else delete cur.page.color; applyPage(); await commitMeta(); }
+function pageColorMenu(el) {
+  const sw = [['', 'No colour'], ['#ffffff', 'White'], ['#fdf8ec', 'Cream'], ['#f4ecd8', 'Sepia'], ['#f3f4f6', 'Light grey'], ['#eef4ff', 'Light blue'], ['#ecfdf3', 'Light green'], ['#fff1f2', 'Light pink'], ['#fffbeb', 'Light yellow'], ['#1f2430', 'Dark']];
+  const box = document.createElement('div'); box.className = 'swatches';
+  box.innerHTML = sw.map(([c, n]) => `<button title="${n}" data-c="${c}" style="background:${c || 'linear-gradient(135deg,#fff 45%,#d33 46%,#d33 54%,#fff 55%)'}"></button>`).join('') +
+    `<label class="sw-custom" title="Custom colour"><input type="color" value="${esc(cur?.page.color || '#ffffff')}"><span>Custom…</span></label>`;
+  box.addEventListener('mousedown', e => { if (e.target.tagName !== 'INPUT') e.preventDefault(); });
+  box.addEventListener('click', e => { const b = e.target.closest('[data-c]'); if (b) { hideMenu(); setPageColor(b.dataset.c); } });
+  box.querySelector('input').addEventListener('change', e => { hideMenu(); setPageColor(e.target.value); });
+  showMenu(el, [{ header: 'Page colour' }, { node: box }]);
+}
+async function watermarkDialog() {
+  if (!cur) return;
+  const w = cur.page.wm || {};
+  const presets = ['CONFIDENTIAL', 'DRAFT', 'DO NOT COPY', 'SAMPLE', 'URGENT', 'ASAP'];
+  const r = await promptDialog('Watermark', [
+    { name: 'text', label: 'Text (leave empty for none)', value: w.text || '' },
+    { name: 'layout', label: 'Layout', type: 'select', value: w.diag === false ? 'h' : 'd', options: [['d', 'Diagonal'], ['h', 'Horizontal']] },
+    { name: 'color', label: 'Colour', type: 'color', value: w.color || '#c3c8d1' }
+  ], 'Apply', `<div class="field"><label>Quick pick</label><div class="chips">${presets.map(p => `<button type="button" class="btn small outline" data-wm="${p}">${p}</button>`).join('')}</div></div>`);
+  if (!r) return;
+  if (r.text.trim()) cur.page.wm = { text: r.text.trim().slice(0, 60), diag: r.layout !== 'h', color: r.color }; else delete cur.page.wm;
+  Pager.sig = ''; Pager.run(); await commitMeta();
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-wm]'); if (b) { const i = $('#pf_text'); if (i) { i.value = b.dataset.wm; i.focus(); } } });
+async function pageBorderDialog() {
+  if (!cur) return;
+  const b = cur.page.border || {};
+  const r = await promptDialog('Page borders', [
+    { name: 'style', label: 'Style', type: 'select', value: b.style || 'solid', options: [['none', 'None'], ['solid', 'Single line'], ['double', 'Double line'], ['thick', 'Thick'], ['dashed', 'Dashed'], ['dotted', 'Dotted']] },
+    { name: 'w', label: 'Width (pt)', type: 'number', step: '0.25', value: b.w || 1 },
+    { name: 'color', label: 'Colour', type: 'color', value: b.color || '#1c2230' },
+    { name: 'off', label: 'Distance from the page edge (pt)', type: 'number', step: '1', value: b.off ?? 24, hint: 'Word uses 24 pt by default.' }
+  ], 'Apply');
+  if (!r) return;
+  if (r.style === 'none') delete cur.page.border;
+  else cur.page.border = { style: r.style, w: clamp(parseFloat(r.w) || 1, 0.25, 12), color: r.color, off: clamp(parseFloat(r.off) || 0, 0, 72) };
+  Pager.sig = ''; Pager.run(); await commitMeta();
+}
+
+/* -------------------------------------------------------------- go to page */
+function goToPage(n) {
+  if (!cur) return;
+  if (settings.pageView !== 'pages') { toast('Go to page works in Print layout'); return; }
+  Pager.finish();
+  const g = Pager.geo, N = stats.pages || 1; const k = clamp(Math.round(n), 1, N) - 1;
+  const pr = page.getBoundingClientRect(), cr = canvas.getBoundingClientRect();
+  canvas.scrollTop += pr.top + k * (g.H + g.G) * g.z - cr.top - 8;
+  // put the cursor at the start of that page so you can type straight away
+  requestAnimationFrame(() => {
+    const pr2 = page.getBoundingClientRect(); const y = pr2.top + (k * (g.H + g.G) + g.mT + 6) * g.z;
+    const r = document.caretRangeFromPoint ? document.caretRangeFromPoint(pr2.left + pr2.width / 2, y) : null;
+    if (r && editor.contains(r.startContainer)) { editor.focus({ preventScroll: true }); setRange(r); }
+  });
+}
+async function goToPageDialog() {
+  if (!cur) return;
+  const N = stats.pages || 1;
+  const r = await promptDialog('Go to page', [{ name: 'n', label: `Page number (1–${N})`, type: 'number', value: stats.page || 1 }], 'Go');
+  if (r && r.n) goToPage(+r.n);
+}
+
+/* pinch to zoom on touch screens: preview with a transform while pinching, apply once at the end */
+(() => {
+  let start = null;
+  const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  canvas.addEventListener('touchstart', e => { if (e.touches.length === 2) { start = { d: dist(e.touches), z: settings.zoom, s: 1 }; pageWrap.style.transformOrigin = 'top center'; } }, { passive: true });
+  canvas.addEventListener('touchmove', e => {
+    if (!start || e.touches.length !== 2) return;
+    e.preventDefault();
+    start.s = clamp(dist(e.touches) / start.d, 30 / start.z, 200 / start.z);
+    pageWrap.style.transform = `scale(${start.s})`;
+  }, { passive: false });
+  const end = () => { if (!start) return; const z = start.z * start.s; start = null; pageWrap.style.transform = ''; if (Math.abs(z - settings.zoom) > 2) setZoom(z); };
+  canvas.addEventListener('touchend', e => { if (e.touches.length < 2) end(); });
+  canvas.addEventListener('touchcancel', end);
+})();
 
 /* ================================================================ actions */
 const act = {
@@ -3031,6 +3406,13 @@ const act = {
   painter: () => {},
   paragraph: () => paragraphDialog(),
   stylesDialog: () => stylesDialog(),
+  bookmark: () => bookmarkDialog(),
+  goToPage: () => goToPageDialog(),
+  mTools: () => { const on = document.body.classList.toggle('m-ribbon'); $('#mTools').classList.toggle('on', on); },
+  mHide: () => { editor.blur(); getSelection().removeAllRanges(); document.body.classList.remove('m-ribbon'); $('#mTools').classList.remove('on'); },
+  mStyle: el => showMenu(el, [['p', 'Normal'], ['title', 'Title'], ['subtitle', 'Subtitle'], ['h1', 'Heading 1'], ['h2', 'Heading 2'], ['h3', 'Heading 3'], ['blockquote', 'Quote']].map(([v, l]) => ({ label: l, act: () => { restoreSel(); applyBlockStyle(v); } }))),
+  mAlign: el => showMenu(el, [['justifyLeft', 'align-left', 'Left'], ['justifyCenter', 'align-center', 'Centre'], ['justifyRight', 'align-right', 'Right'], ['justifyFull', 'align-justify', 'Justify']].map(([c, i, l]) => ({ icon: i, label: l, act: () => { restoreSel(); exec(c); } }))),
+  themeMenu: el => themeMenu(el), pageColorMenu: el => pageColorMenu(el), watermark: () => watermarkDialog(), pageBorders: () => pageBorderDialog(),
   toggleRuler: () => { settings.ruler = !settings.ruler; saveSettings(); Ruler.render(); Pager.sig = ''; Pager.run(); },
   toggleNav: () => { const sb = $('#sidebar'); if (Nav.open && !sb.classList.contains('closed')) { showSidePane('docs'); return; } sb.classList.remove('closed'); showSidePane('nav'); },
   acOptions: () => autoCorrectDialog(),
@@ -3126,7 +3508,8 @@ document.addEventListener('keydown', e => {
   if (e.altKey && !mod && k === 'n') { e.preventDefault(); act.newDoc(); return; }
   if (!mod) return;
   const map = {
-    s: () => (e.shiftKey ? saveVersionDialog() : (pendingSave = true, saveNow().then(() => { Sync.run(); toast(Sync.enabled() ? 'Saved — syncing' : 'Saved'); }))),
+    g: () => goToPageDialog(),
+    s: () => (e.shiftKey ? saveVersionDialog() : saveNow().then(() => { Sync.run(); toast(Sync.enabled() ? 'Saved — syncing' : 'Saved'); })),
     f: () => openPanel('find'), h: () => act.replace(), k: () => linkDialog(),
     '\\': () => clearFormat()
   };
@@ -3446,6 +3829,12 @@ async function buildDocx(d, root) {
         if (tag === 'IMG') { out.push(imageRun(c)); continue; }
         if (/^(UL|OL|TABLE)$/.test(tag)) continue;
         if (c.style && c.style.cssFloat === 'right') { st.rightTab = true; out.push(new D.TextRun({ children: [new D.Tab()] })); }
+        if (tag === 'SPAN' && c.classList.contains('bm')) { out.push(new D.Bookmark({ id: wordBm(c.id || 'bm-' + c.dataset.bm), children: [] })); continue; }
+        if (tag === 'A' && (c.getAttribute('href') || '').startsWith('#') && c.getAttribute('href').length > 1) {
+          const kids = []; inlines(c, { ...fmtFrom(c, fmt), link: true, color: fmt.color || '1D5BBF', underline: true }, kids, pre);
+          out.push(new D.InternalHyperlink({ anchor: wordBm(c.getAttribute('href').slice(1)), children: kids }));
+          continue;
+        }
         if (tag === 'A' && c.getAttribute('href') && !c.getAttribute('href').startsWith('#')) {
           const kids = []; inlines(c, { ...fmtFrom(c, fmt), link: true, color: fmt.color || '1D5BBF', underline: true }, kids, pre);
           out.push(new D.ExternalHyperlink({ link: c.href, children: kids }));
@@ -3472,9 +3861,13 @@ async function buildDocx(d, root) {
     return o;
   }
   const isBlock = n => n.nodeType === 1 && /^(P|DIV|H[1-6]|UL|OL|TABLE|BLOCKQUOTE|PRE|HR|SECTION|ARTICLE|HEADER|FOOTER|FIGURE)$/.test(n.tagName);
+  // Word bookmark names: letters, digits, _ ; headings that links point to get a bookmark of their own
+  const wordBm = id => (id.startsWith('bm-') ? id.slice(3) : id).replace(/[^\p{L}\p{N}_]/gu, '_').replace(/^(?=[^\p{L}_])/u, 'B').slice(0, 40);
+  const linkedIds = new Set($$('a[href^="#"]', root).map(a => a.getAttribute('href').slice(1)));
   function para(el, base = {}, fmt = {}) {
     st.rightTab = false;
     const kids = inlines(el, fmtFrom(el, fmt), [], el.tagName === 'PRE');
+    if (el.id && linkedIds.has(el.id) && !el.classList.contains('bm')) kids.unshift(new D.Bookmark({ id: wordBm(el.id), children: [] }));
     const o = paraOpts(el, base);
     if (st.rightTab) { o.tabStops = [{ type: D.TabStopType.RIGHT, position: contentTw }]; st.rightTab = false; }
     const only = el.children.length === 1 && el.firstElementChild.tagName === 'IMG' && !el.textContent.trim() ? el.firstElementChild : null;
@@ -3622,6 +4015,7 @@ async function buildDocx(d, root) {
   const hdrText = d === cur ? hdr.innerText.trim() : d.header; const ftrText = d === cur ? ftr.innerText.trim() : d.footer;
   const docx = new D.Document({
     creator: me(), title: d.title, description: 'Created with Lekh',
+    ...(d.page.color && toHex(d.page.color) ? { background: { color: toHex(d.page.color) } } : {}),
     features: { trackRevisions: !!d.track },
     styles: (() => {
       const st = fullStyles(d); const fam = f => { const x = (f || st.normal.font).split(',')[0].replace(/["']/g, '').trim(); return x === 'Carlito' ? 'Calibri' : x === 'EB Garamond' ? 'Garamond' : x; };
@@ -3658,7 +4052,11 @@ async function buildDocx(d, root) {
         ...(i ? { type: D.SectionType.CONTINUOUS } : {}),
         ...(d.page.valign === 'center' || d.page.valign === 'bottom' ? { verticalAlign: d.page.valign === 'center' ? D.VerticalAlign.CENTER : D.VerticalAlign.BOTTOM } : {}),
         ...(sec.cols > 1 ? { column: { count: sec.cols, space: sec.gap || 576, equalWidth: true } } : {}),
-        page: { size: { width: twip(pw), height: twip(ph), orientation: d.page.orient === 'landscape' ? D.PageOrientation.LANDSCAPE : D.PageOrientation.PORTRAIT }, margin: { top: twip(m.t), right: twip(m.r), bottom: twip(m.b), left: twip(m.l), header: twip(Math.min(0.5, m.t / 2)), footer: twip(Math.min(0.5, m.b / 2)) } }
+        page: { size: { width: twip(pw), height: twip(ph), orientation: d.page.orient === 'landscape' ? D.PageOrientation.LANDSCAPE : D.PageOrientation.PORTRAIT }, margin: { top: twip(m.t), right: twip(m.r), bottom: twip(m.b), left: twip(m.l), header: twip(Math.min(0.5, m.t / 2)), footer: twip(Math.min(0.5, m.b / 2)) },
+          ...(d.page.border && d.page.border.style !== 'none' ? { borders: (() => {
+            const b = d.page.border; const one = { style: { solid: D.BorderStyle.SINGLE, double: D.BorderStyle.DOUBLE, thick: D.BorderStyle.THICK, dashed: D.BorderStyle.DASHED, dotted: D.BorderStyle.DOTTED }[b.style] || D.BorderStyle.SINGLE, size: Math.round(clamp(b.w || 1, 0.25, 6) * 8), color: toHex(b.color) || '000000', space: Math.round(clamp(b.off ?? 24, 0, 31)) };
+            return { pageBorders: { display: D.PageBorderDisplay.ALL_PAGES, offsetFrom: D.PageBorderOffsetFrom.PAGE }, pageBorderTop: one, pageBorderRight: one, pageBorderBottom: one, pageBorderLeft: one };
+          })() } : {}) }
       },
       headers: i === 0 && hdrText ? { default: new D.Header({ children: hfParas(hdrText) }) } : undefined,
       footers: i === 0 && ftrText ? { default: new D.Footer({ children: hfParas(ftrText) }) } : undefined,
@@ -3769,8 +4167,15 @@ const Sync = {
       if (o && o.lekhEnc) { if (!Vault.key) throw new Error('Locked'); try { o = safeJSON(await Vault.open(Vault.key, o)); } catch { throw new Error('A synced file could not be decrypted with your passphrase.'); } }
       return o;
     };
+    const head = f => { const t = f.content || ''; const m = /^\{"(?:tag":"[dv]:|id":"[^"]*","(?:ver|sig)":")([^"]+)"/.exec(t.slice(0, 400)); return m ? m[1] : null; };
     for (const [name, f] of Object.entries(files)) {
       if (!/^lekh-[^.]+\.json$/.test(name) || name === 'lekh-key.json') continue;
+      const fid = name.slice(5, -5), hv = head(f);
+      if (hv) {                                         // unchanged since we last saw it: no download, no decrypt, no parse
+        const ld0 = await DB.get(fid);
+        if (ld0 && ld0.base === hv) { seen.add(fid); continue; }
+        if (ld0 && ld0.ver === hv) { seen.add(fid); ld0.base = hv; ld0.dirty = false; await DB.put(ld0); continue; }
+      }
       const rd = await read(f); if (!rd || !rd.id) continue;
       seen.add(rd.id);
       const ld = (await DB.get(rd.id)) || null;
@@ -3780,7 +4185,7 @@ const Sync = {
       if (ld.base === rd.ver) continue;
       if (ld.ver === rd.ver) { ld.base = rd.ver; ld.dirty = false; await DB.put(ld); continue; }
       if (!ld.dirty) {
-        Object.assign(remote, { dirty: false, base: rd.ver, vDirty: ld.vDirty, vSynced: ld.vSynced });
+        Object.assign(remote, { dirty: false, base: rd.ver, vDirty: ld.vDirty, vSynced: ld.vSynced, vRemote: ld.vRemote });
         if (rd.purged) { await DB.del(rd.id); changed.add(rd.id); continue; }
         await DB.put(remote); changed.add(rd.id);
       } else {
@@ -3794,12 +4199,13 @@ const Sync = {
     for (const [name, f] of Object.entries(files)) {
       const m = /^lekh-([^.]+)\.v\.json$/.exec(name); if (!m) continue;
       const ld = await DB.get(m[1]); if (!ld) continue;
+      const hv = head(f); if (hv && ld.vRemote === hv) continue;        // same history we already merged or pushed
       const rv = (await read(f))?.versions || [];
       const map = new Map(rv.map(v => [v.id, v])); const localOnly = (ld.versions || []).some(v => !map.has(v.id));
       (ld.versions || []).forEach(v => map.set(v.id, v));
       const merged = [...map.values()].sort((a, b) => b.time - a.time);
       const before = JSON.stringify((ld.versions || []).map(v => v.id));
-      ld.versions = merged; ld.vSynced = true; ld.vDirty = ld.vDirty || localOnly;
+      ld.versions = merged; ld.vSynced = true; ld.vDirty = ld.vDirty || localOnly; if (hv) ld.vRemote = hv;
       if (JSON.stringify(merged.map(v => v.id)) !== before) changed.add(ld.id);
       await DB.put(ld);
     }
@@ -3822,13 +4228,18 @@ const Sync = {
   async push() {
     const all = await DB.all();
     const files = {}; const snap = [];
-    const pack = async obj => { const t = JSON.stringify(obj); return Vault.on() ? Vault.seal(Vault.key, t) : t; };
+    // the first bytes of every file say which version it holds, so other devices can skip unchanged files
+    // without downloading or decrypting them (the tag is a random id, not content)
+    const pack = async (obj, tag) => {
+      const t = JSON.stringify(obj); if (!Vault.on()) return t;
+      const sealed = await Vault.seal(Vault.key, t); return tag ? '{"tag":' + JSON.stringify(tag) + ',' + sealed.slice(1) : sealed;
+    };
     if (Vault.on() && !Vault.key) return;
     for (const d of all) {
       const name = `lekh-${d.id}.json`, vname = `lekh-${d.id}.v.json`;
       if (d.purged) { if (d.base) files[name] = null; if (d.vSynced) files[vname] = null; snap.push([d.id, 'purge']); continue; }
-      if (d.dirty) { const out = { ...d }; ['dirty', 'base', 'vDirty', 'vSynced', 'versions'].forEach(k => delete out[k]); files[name] = { content: await pack(out) }; snap.push([d.id, d.ver, 'doc']); }
-      if (d.vDirty && (d.versions || []).length) { files[vname] = { content: await pack({ id: d.id, versions: d.versions }) }; snap.push([d.id, d.versions.length, 'v']); }
+      if (d.dirty) { const out = { id: d.id, ver: d.ver, ...d }; ['dirty', 'base', 'vDirty', 'vSynced', 'versions', 'vSig', 'vRemote'].forEach(k => delete out[k]); files[name] = { content: await pack(out, 'd:' + d.ver) }; snap.push([d.id, d.ver, 'doc']); }
+      if (d.vDirty && (d.versions || []).length) { const vs = vsig(d.versions); files[vname] = { content: await pack({ id: d.id, sig: vs, versions: d.versions }, 'v:' + vs) }; snap.push([d.id, d.versions.length, 'v', vs]); }
       else if (d.vDirty) snap.push([d.id, 0, 'v']);
     }
     const names = Object.keys(files); if (!names.length && !snap.length) return;
@@ -3845,13 +4256,13 @@ const Sync = {
       batch[n] = files[n]; size += len;
     }
     await send();
-    for (const [id, v, kind] of snap) {
+    for (const [id, v, kind, vs] of snap) {
       const fresh = await DB.get(id); if (!fresh) continue;
       if (v === 'purge') { await DB.del(id); docs.delete(id); continue; }
       if (kind === 'doc') { if (fresh.ver === v) fresh.dirty = false; fresh.base = v; }
-      if (kind === 'v') { if ((fresh.versions || []).length === v) fresh.vDirty = false; if (v) fresh.vSynced = true; }
+      if (kind === 'v') { if ((fresh.versions || []).length === v) fresh.vDirty = false; if (v) fresh.vSynced = true; if (vs) fresh.vRemote = vs; }
       await DB.put(fresh);
-      if (docs.has(id)) { const m = docs.get(id); m.dirty = fresh.dirty; m.base = fresh.base; m.vDirty = fresh.vDirty; m.vSynced = fresh.vSynced; }
+      if (docs.has(id)) { const m = docs.get(id); m.dirty = fresh.dirty; m.base = fresh.base; m.vDirty = fresh.vDirty; m.vSynced = fresh.vSynced; m.vRemote = fresh.vRemote; }
     }
     post({ type: 'synced' });
   },
@@ -4034,6 +4445,6 @@ const WELCOME = `
 <table><tbody><tr><th>Shortcut</th><th>Does</th></tr><tr><td>Ctrl+S</td><td>Save now and sync</td></tr><tr><td>Ctrl+Shift+S</td><td>Save a named version</td></tr><tr><td>Ctrl+F / Ctrl+H</td><td>Find / replace</td></tr><tr><td>Ctrl+Enter</td><td>Page break</td></tr></tbody></table>
 <p>See <b>File → Keyboard shortcuts</b> for the full list. You can delete this document whenever you like.</p>`;
 
-window.LekhDebug = { relayout: () => { const t = performance.now(); Pager.run(); return performance.now() - t; } };
+window.LekhDebug = { Pager, DB, cur: () => cur, sync: () => Sync, relayout: () => { const t = performance.now(); Pager.full = true; Pager.run({ sync: true }); return performance.now() - t; } };
 boot();
 })();
