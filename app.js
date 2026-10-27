@@ -14,7 +14,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const TAB_ID = uid('t');
-const LEKH_VERSION = 13;
+const LEKH_VERSION = 14;
 const GIST_DESC = 'Lekh documents (sync) — do not edit by hand';
 const editor = $('#editor'), page = $('#page'), pageWrap = $('#pageWrap'), canvas = $('#canvas');
 const hdr = $('#hdr'), ftr = $('#ftr');
@@ -621,6 +621,7 @@ const Pager = {
         const t = c.tagName;
         if (t === 'TABLE') { for (const tr of c.rows) if (!tr.classList.contains('pg-gap')) out.push({ el: tr, atomic: true }); continue; }
         if (c.classList.contains('page-break')) { out.push({ el: c, pb: true }); continue; }
+        if (c.tagName === 'IMG' && (c.dataset.wrap === 'behind' || c.dataset.wrap === 'front')) continue;   // floats over the page, takes no room
         if (c.matches('.toc, hr, img, figure')) { out.push({ el: c, atomic: true }); continue; }
         if (c.classList.contains('cols')) { out.push({ el: c, atomic: true, cols: true }); continue; }
         if (t === 'UL' || t === 'OL') { walk(c); continue; }
@@ -642,7 +643,7 @@ const Pager = {
         if (n.nodeType === 3) return NodeFilter.FILTER_ACCEPT;
         if (n.classList.contains('pg-gap')) return NodeFilter.FILTER_REJECT;
         if (L.own && /^(UL|OL|P|DIV|TABLE|BLOCKQUOTE|PRE|H[1-6])$/.test(n.tagName)) return NodeFilter.FILTER_REJECT;
-        if (n.tagName === 'IMG') return NodeFilter.FILTER_ACCEPT;
+        if (n.tagName === 'IMG') return n.dataset.wrap === 'behind' || n.dataset.wrap === 'front' ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
         if (n.matches('sup.fn, .mf')) return NodeFilter.FILTER_ACCEPT;
         return NodeFilter.FILTER_SKIP;
       }
@@ -1051,6 +1052,7 @@ function exec(cmd, val = null) {
   document.execCommand(cmd, false, val);
   markChanged(); updateToolbar();
 }
+function rangeCovers(r, el) { const t = document.createRange(); t.selectNodeContents(el); return r.compareBoundaryPoints(Range.START_TO_START, t) <= 0 && r.compareBoundaryPoints(Range.END_TO_END, t) >= 0; }
 function applyFontSize(pt) {
   restoreSel(); const r = selRange(); if (!r) return;
   History.push('fmt', true);
@@ -1062,7 +1064,10 @@ function applyFontSize(pt) {
   } else {
     document.execCommand('fontSize', false, '7');
     $$('font[size="7"]', editor).forEach(f => { const s = document.createElement('span'); s.style.fontSize = pt + 'pt'; while (f.firstChild) s.appendChild(f.firstChild); f.replaceWith(s); });
-    $$('span[style*="xxx-large"]', editor).forEach(s => { s.style.fontSize = pt + 'pt'; });
+    // the browser marks the new size as "xxx-large" on whatever element it picked (span, b, i, p…): turn every one into the real size
+    $$('[style*="xxx-large"]', editor).forEach(s => { s.style.fontSize = pt + 'pt'; });
+    // and inner pieces that still carry an older size of their own would otherwise keep it
+    const r2 = selRange(); if (r2) $$('[style*="font-size"]', editor).forEach(el => { if (el.style.fontSize !== pt + 'pt' && r2.intersectsNode(el) && el.closest('[style*="font-size: ' + pt + 'pt"], [style*="font-size:' + pt + 'pt"]') !== el && el.parentElement.closest('[style*="font-size: ' + pt + 'pt"]') && rangeCovers(r2, el)) el.style.fontSize = ''; });
   }
   markChanged(); updateToolbar();
 }
@@ -1973,7 +1978,7 @@ function hideFloatbars(except) { ['tableBar', 'imageBar', 'linkBar'].forEach(id 
 function selectImage(img) {
   if (selImg && selImg !== img) selImg.classList.remove('img-selected');
   selImg = img;
-  if (img) { img.classList.add('img-selected'); placeBar($('#imageBar'), img.getBoundingClientRect(), false); placeHandle(); }
+  if (img) { img.classList.add('img-selected'); const w = imgWrapOf(img); $$('#imageBar [data-img^="w:"]').forEach(b => b.classList.toggle('on', b.dataset.img === 'w:' + w)); placeBar($('#imageBar'), img.getBoundingClientRect(), false); placeHandle(); }
   else { $('#imageBar').classList.remove('show'); imgHandle.classList.remove('show'); }
 }
 function refreshTableBar() {
@@ -1994,23 +1999,42 @@ async function imageOp(op) {
       { header: 'Text wraps around' },
       item('left', 'Image on the left', 'align-left'), item('right', 'Image on the right', 'align-right'),
       { header: 'On its own line (top and bottom)' },
-      item('block-left', 'Left', 'align-left'), item('block-center', 'Centre', 'align-center'), item('block-right', 'Right', 'align-right')
+      item('block-left', 'Left', 'align-left'), item('block-center', 'Centre', 'align-center'), item('block-right', 'Right', 'align-right'),
+      { header: 'Float over the page (drag to place)' },
+      item('behind', 'Behind text', 'layers'), item('front', 'In front of text', 'layers-2')
     ]);
     return;
   }
   else if (['left', 'right', 'center'].includes(op)) setImgWrap(img, op === 'center' ? 'block-center' : op);
+  else if (op.startsWith('w:')) setImgWrap(img, op.slice(2));
   else if (op === 'delete') { img.remove(); selectImage(null); markChanged(); return; }
   else if (op === 'alt') { const r = await promptDialog('Alt text', [{ name: 'alt', label: 'Describe the image for screen readers', value: img.alt }], 'Save'); if (r) img.alt = r.alt; }
   afterImgChange();
 }
 function imgWrapOf(img) {
   const s = img.style;
+  if (img.dataset.wrap === 'behind' || img.dataset.wrap === 'front') return img.dataset.wrap;
   if (s.float === 'left' || s.float === 'right') return s.float;
   if (s.display === 'block') return s.marginLeft === 'auto' && s.marginRight === 'auto' ? 'block-center' : s.marginLeft === 'auto' ? 'block-right' : 'block-left';
   return 'inline';
 }
 function setImgWrap(img, v) {
-  const s = img.style; s.float = ''; s.display = ''; s.margin = '';
+  const s = img.style;
+  if (v === 'behind' || v === 'front') {
+    // float freely over the page: keep it where it is now, text no longer moves around it; it still moves with its paragraph
+    const z = (Pager.geo?.z) || settings.zoom / 100;
+    const wasFloat = img.dataset.wrap === 'behind' || img.dataset.wrap === 'front';
+    const r = img.getBoundingClientRect(); const wpx = r.width / z;
+    if (!wasFloat) {
+      s.float = ''; s.display = 'block'; s.margin = '0'; s.position = 'absolute'; s.top = ''; s.marginTop = '0px'; s.left = '0px';
+      const cb = (img.offsetParent || editor).getBoundingClientRect(), r2 = img.getBoundingClientRect();
+      s.left = Math.round((r.left - cb.left) / z) + 'px'; s.marginTop = Math.round((r.top - r2.top) / z) + 'px';
+      if (/%$/.test(s.width)) s.width = Math.round(wpx) + 'px';
+    }
+    s.zIndex = v === 'behind' ? '-1' : '2'; img.dataset.wrap = v; return;
+  }
+  if (img.dataset.wrap) { delete img.dataset.wrap; s.position = ''; s.left = ''; s.top = ''; s.zIndex = ''; s.marginTop = ''; }
+  s.float = ''; s.display = ''; s.margin = '';
   if (v === 'left') { s.float = 'left'; s.margin = '2px 14px 6px 0'; }
   else if (v === 'right') { s.float = 'right'; s.margin = '2px 0 6px 14px'; }
   else if (v === 'block-center') { s.display = 'block'; s.margin = '6px auto'; }
@@ -2018,6 +2042,40 @@ function setImgWrap(img, v) {
   else if (v === 'block-right') { s.display = 'block'; s.margin = '6px 0 6px auto'; }
 }
 function afterImgChange() { markChanged(); Pager.schedule(30); setTimeout(() => selImg && selectImage(selImg), 60); }
+/* pictures behind text: clicking where there's no text selects them; floating pictures can be dragged anywhere */
+function floatImgAt(x, y, target) {
+  if (target && target.tagName === 'IMG' && (target.dataset.wrap === 'front' || target.dataset.wrap === 'behind')) return target;
+  const im = document.elementsFromPoint(x, y).find(el => el.tagName === 'IMG' && el.dataset.wrap === 'behind' && editor.contains(el));
+  if (!im) return null;
+  const cr = document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;     // over actual letters? then it's a text click
+  if (cr && cr.startContainer.nodeType === 3 && cr.startContainer.length) {
+    const t = cr.startContainer, o = Math.min(cr.startOffset, t.length - 1), rr = document.createRange();
+    for (const k of [o, Math.max(0, o - 1)]) { rr.setStart(t, k); rr.setEnd(t, k + 1); const b = rr.getBoundingClientRect(); if (x >= b.left - 1 && x <= b.right + 1 && y >= b.top - 1 && y <= b.bottom + 1) return null; }
+  }
+  return im;
+}
+let floatDrag = null, floatClick = null, floatDragMoved = false;
+editor.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  const im = floatImgAt(e.clientX, e.clientY, e.target); if (!im) return;
+  e.preventDefault(); e.stopPropagation(); floatClick = { t: performance.now(), x: e.clientX, y: e.clientY };
+  hideFloatbars('imageBar'); selectImage(im);
+  floatDrag = { im, x0: e.clientX, y0: e.clientY, l0: parseFloat(im.style.left) || 0, m0: parseFloat(im.style.marginTop) || 0, z: (Pager.geo?.z) || settings.zoom / 100, moved: false };
+}, true);
+document.addEventListener('pointermove', e => {
+  const d = floatDrag; if (!d) return;
+  const dx = (e.clientX - d.x0) / d.z, dy = (e.clientY - d.y0) / d.z;
+  if (!d.moved && Math.hypot(dx, dy) < 3) return;
+  if (!d.moved) { d.moved = true; History.push('img', true); $('#imageBar').classList.remove('show'); }
+  d.im.style.left = Math.round(d.l0 + dx) + 'px'; d.im.style.marginTop = Math.round(d.m0 + dy) + 'px'; placeHandle();
+});
+document.addEventListener('pointerup', () => { const d = floatDrag; if (!d) return; floatDrag = null; floatDragMoved = d.moved; if (d.moved) afterImgChange(); });
+editor.addEventListener('click', e => {
+  const f = floatClick; floatClick = null;     // the click that ends a press (or drag) on a floating picture
+  if ((f && performance.now() - f.t < 1500 && (floatDragMoved || Math.hypot(e.clientX - f.x, e.clientY - f.y) < 6)) || floatImgAt(e.clientX, e.clientY, e.target)) { e.stopImmediatePropagation(); e.preventDefault(); }
+  floatDragMoved = false;
+}, true);
+
 /* drag the corner handle to resize an image */
 const imgHandle = $('#imgHandle'); let imgDrag = null;
 function placeHandle() {
@@ -3828,7 +3886,14 @@ async function buildDocx(d, root) {
     const rect = img.getBoundingClientRect();
     let w = rect.width / z, h = rect.height / z;
     if (!w || !h) { w = img.naturalWidth || 300; h = img.naturalHeight || 200; const max = 624; if (w > max) { h = h * max / w; w = max; } }
-    const fl = img.style.float;
+    const fl = img.style.float, fw = img.dataset.wrap;
+    if (fw === 'behind' || fw === 'front') {                 // floating over the page: position relative to its paragraph and the text column
+      const pr = (img.closest('p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, div') || root).getBoundingClientRect(), er = root.getBoundingClientRect();
+      const emu = px => Math.round(px / z * 9525);
+      return new D.ImageRun({ type, data: bytes, transformation: { width: Math.round(w), height: Math.round(h) }, altText: img.alt ? { name: img.alt, description: img.alt, title: img.alt } : undefined,
+        floating: { horizontalPosition: { relative: D.HorizontalPositionRelativeFrom.COLUMN, offset: emu(rect.left - er.left) }, verticalPosition: { relative: D.VerticalPositionRelativeFrom.PARAGRAPH, offset: emu(rect.top - pr.top) },
+          wrap: { type: D.TextWrappingType.NONE }, behindDocument: fw === 'behind', allowOverlap: true, zIndex: fw === 'behind' ? 0 : 3 } });
+    }
     const floating = fl === 'left' || fl === 'right' ? {
       horizontalPosition: { relative: D.HorizontalPositionRelativeFrom.COLUMN, align: fl === 'left' ? D.HorizontalPositionAlign.LEFT : D.HorizontalPositionAlign.RIGHT },
       verticalPosition: { relative: D.VerticalPositionRelativeFrom.PARAGRAPH, offset: 0 },

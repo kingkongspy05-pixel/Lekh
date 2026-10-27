@@ -1,5 +1,5 @@
 /* Lekh service worker — lets the app open offline after the first visit. */
-const CACHE = 'lekh-v13';
+const CACHE = 'lekh-v14';
 const CORE = ['./', './index.html', './styles.css', './app.js', './templates.js', './docx-import.js', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png', './icon-180.png'];
 
 self.addEventListener('install', e => {

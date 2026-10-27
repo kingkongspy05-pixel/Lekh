@@ -308,6 +308,18 @@ async function convert(buf) {
     const pct = wpx ? Math.max(5, Math.min(100, Math.round((wpx / contentWidthPx) * 100))) : 100;
     let style = `width:${pct}%`;
     const anchor = desc(el, 'anchor')[0];
+    if (anchor && desc(anchor, 'wrapNone').length) {
+      // "Behind text" / "In front of text": float over the page at Word's position (relative to the text column; moves with its paragraph)
+      const behind = at(anchor, 'behindDoc') === '1';
+      const ph = kid(anchor, 'positionH'), pv = kid(anchor, 'positionV');
+      const offH = +((kid(ph, 'posOffset') || {}).textContent || 0) / 9525, offV = +((kid(pv, 'posOffset') || {}).textContent || 0) / 9525;
+      const fromH = at(ph, 'relativeFrom') || 'column', alH = (kid(ph, 'align') || {}).textContent;
+      let left = fromH === 'page' ? offH - page.margins.l * 96 : offH;
+      if (alH) left = alH === 'right' ? contentWidthPx - wpx : alH === 'center' ? (contentWidthPx - wpx) / 2 : 0;
+      const fromV = at(pv, 'relativeFrom') || 'paragraph';
+      const mt = fromV === 'paragraph' || fromV === 'line' ? offV : 0;
+      return `<img src="${src}" alt="${esc(alt)}" data-wrap="${behind ? 'behind' : 'front'}" style="width:${Math.round(wpx || 200)}px;display:block;margin:0;position:absolute;left:${Math.round(left)}px;margin-top:${Math.round(mt)}px;z-index:${behind ? -1 : 2}">`;
+    }
     if (anchor) {
       const align = (desc(anchor, 'align')[0] || {}).textContent;
       const tb = desc(anchor, 'wrapTopAndBottom').length;
