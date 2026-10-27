@@ -12,7 +12,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Carlito:ital,wght@0,400;0,700;1,400;1,700&family=EB+Garamond:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;600;700&family=Lora:ital,wght@0,400;0,700;1,400&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&family=Noto+Sans+Devanagari:wght@400;700&family=Noto+Serif+Devanagari:wght@400;700&family=Roboto:ital,wght@0,400;0,700;1,400&family=Roboto+Mono&display=swap">
-<link rel="stylesheet" href="styles.css?v=14">
+<link rel="stylesheet" href="styles.css?v=15">
 </head>
 <body>
 
@@ -115,6 +115,7 @@
           <option value="1.8">1.5</option><option value="2.4">2.0</option><option value="3">2.5</option><option value="3.6">3.0</option>
         </select>
         <button class="icon-btn" data-act="sort" title="Sort A–Z"><i data-lucide="arrow-down-a-z"></i></button>
+        <button class="icon-btn" data-act="joinLines" title="Join lines — remove manual line breaks inside the selected paragraphs (fixes justify on pasted text)"><i data-lucide="wrap-text"></i></button>
         <button class="icon-btn" id="btnMarks" data-act="toggleMarks" title="Show paragraph marks (Ctrl+Shift+8 in Word)"><i data-lucide="pilcrow"></i></button>
         <span class="split">
           <button class="icon-btn color-btn" data-act="applyShade" title="Shading (paragraph or selected cells)"><i data-lucide="paint-bucket"></i><span class="swatch" id="pShadeSwatch" style="background:#fff3bf"></span></button>
@@ -454,8 +455,8 @@
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/turndown-plugin-gfm@1.0.2/dist/turndown-plugin-gfm.js" defer></script>
-<script src="templates.js?v=14"></script>
-<script src="docx-import.js?v=14"></script>
-<script src="app.js?v=14"></script>
+<script src="templates.js?v=15"></script>
+<script src="docx-import.js?v=15"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>

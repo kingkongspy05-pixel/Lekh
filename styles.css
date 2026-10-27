@@ -631,3 +631,6 @@ body.focus .exit-focus { display: inline-flex; }
 .wbtn .wico { width: 20px; height: 20px; }
 .wbtn.on { background: var(--accent-soft, rgba(67,56,202,.15)); color: var(--accent); }
 #editor img[data-wrap="behind"], #editor img[data-wrap="front"] { max-width: none; cursor: move; }
+
+.toast.has-act { display: flex; align-items: center; gap: 12px; max-width: min(560px, 92vw); }
+.toast-act { flex: none; border: 0; border-radius: 6px; padding: 5px 10px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }

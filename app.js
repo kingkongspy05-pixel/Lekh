@@ -14,7 +14,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const TAB_ID = uid('t');
-const LEKH_VERSION = 14;
+const LEKH_VERSION = 15;
 const GIST_DESC = 'Lekh documents (sync) — do not edit by hand';
 const editor = $('#editor'), page = $('#page'), pageWrap = $('#pageWrap'), canvas = $('#canvas');
 const hdr = $('#hdr'), ftr = $('#ftr');
@@ -237,8 +237,13 @@ function icons() { try { lucide.createIcons({ attrs: { 'aria-hidden': 'true' } }
 function toast(msg, opts = {}) {
   const el = document.createElement('div');
   el.className = 'toast' + (opts.err ? ' err' : ''); el.textContent = msg;
+  if (opts.action) {
+    const b = document.createElement('button'); b.className = 'toast-act'; b.textContent = opts.action.label;
+    b.onmousedown = e => e.preventDefault(); b.onclick = () => { el.remove(); opts.action.fn(); };
+    el.appendChild(b); el.classList.add('has-act');
+  }
   $('#toasts').appendChild(el);
-  setTimeout(() => el.remove(), opts.ms || (opts.err ? 6000 : 2800));
+  setTimeout(() => el.remove(), opts.ms || (opts.action ? 9000 : opts.err ? 6000 : 2800));
 }
 
 /* modal */
@@ -1046,11 +1051,90 @@ function updateToolbar() {
   });
 }
 
+/* ---- manual line breaks inside paragraphs (text pasted from PDFs, email, chat…) ----
+   A line that ends in a manual break is never stretched by Justify in a browser, so justified text looks broken.
+   joinLines() turns those breaks back into normal flowing text. */
+function hardBreaks(blocks) {
+  const out = [];
+  for (const b of blocks) {
+    for (const br of b.querySelectorAll('br')) {
+      if (br.closest('table') && !b.closest('table')) continue;
+      // ignore a trailing <br> (it just keeps an empty line open)
+      let n = br, last = true;
+      while (n && n !== b) { let sib = n.nextSibling; while (sib && sib.nodeType === 3 && !sib.data.trim()) sib = sib.nextSibling; if (sib) { last = false; break; } n = n.parentNode; }
+      if (!last) out.push(br);
+    }
+    const w = document.createTreeWalker(b, NodeFilter.SHOW_TEXT); let t;      // newlines kept by "white-space: pre-wrap"
+    while ((t = w.nextNode())) if (t.data.includes('\n') && /pre/.test(getComputedStyle(t.parentElement).whiteSpace)) out.push(t);
+  }
+  return out;
+}
+function joinLines(blocks = getSelectedBlocks()) {
+  const list = hardBreaks(blocks); if (!list.length) { toast('No line breaks to join here'); return 0; }
+  History.push('join', true);
+  let n = 0;
+  for (const x of list) {
+    if (!x.isConnected) continue;
+    if (x.nodeType === 3) { const before = x.data; x.data = x.data.replace(/-\n(?=\S)/g, '-').replace(/[ \t]*\n[ \t]*/g, ' '); n += (before.match(/\n/g) || []).length; continue; }
+    const next = x.nextSibling;
+    if (next && next.nodeName === 'BR') {                     // two breaks in a row = a real paragraph break: split the block there
+      const blk = blockOf(x); if (blk && blk !== editor) {
+        const r = document.createRange(); r.setStartAfter(next); r.setEnd(blk, blk.childNodes.length);
+        const rest = r.extractContents(); const nb = blk.cloneNode(false); nb.appendChild(rest); blk.after(nb);
+        next.remove(); x.remove(); n++; continue;
+      }
+    }
+    const prev = x.previousSibling;
+    const prevText = prev && prev.nodeType === 3 ? prev.data : (prev && prev.textContent) || '';
+    const glue = /-$/.test(prevText) || /\s$/.test(prevText) ? '' : ' ';
+    x.replaceWith(document.createTextNode(glue)); n++;
+  }
+  blocks.forEach(b => b.isConnected && b.normalize());
+  markChanged(); toast(`Joined ${n} line break${n === 1 ? '' : 's'} — the text now flows${blocks.some(b => b.isConnected && /justify/.test(getComputedStyle(b).textAlign)) ? ' and justifies' : ''}`);
+  return n;
+}
+/* pasted plain text turns every line into its own paragraph: merge runs of them (an empty line stays a paragraph break) */
+function mergeParas(blocks) {
+  const list = blocks.filter(b => b.isConnected && /^(P|DIV)$/.test(b.tagName) && !b.closest('table, li')).sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+  if (list.length < 2) return 0;
+  History.push('join', true);
+  let n = 0, head = null;
+  for (const b of list) {
+    const empty = !b.textContent.replace(/\u200B/g, '').trim() && !b.querySelector('img');
+    if (empty) { if (head) { head = null; b.remove(); } continue; }
+    if (head && head.nextElementSibling === b) {
+      const t = head.textContent; head.querySelectorAll(':scope > br:last-child').forEach(x => x.remove());
+      head.appendChild(document.createTextNode(/[-\s]$/.test(t) ? '' : ' '));
+      while (b.firstChild) head.appendChild(b.firstChild); b.remove(); n++;
+    } else head = b;
+  }
+  list.forEach(b => b.isConnected && b.normalize());
+  markChanged(); toast(`Joined ${n} line${n === 1 ? '' : 's'} into flowing paragraphs`);
+  return n;
+}
+const looksHardWrapped = text => text.split(/\n/).filter(l => l.trim().length >= 35 && !/[.!?:;]["'’”)\]]?\s*$/.test(l)).length >= 2;
+function offerJoin(blocks, why) {
+  const n = hardBreaks(blocks).length; if (!n) return;
+  toast(why.replace('{n}', n), { action: { label: 'Join lines', fn: () => { joinLines(blocks.filter(b => b.isConnected)); } } });
+}
+const ALIGN = { justifyLeft: 'left', justifyCenter: 'center', justifyRight: 'right', justifyFull: 'justify' };
+function setAlign(v) {
+  // set alignment on each selected paragraph ourselves: the browser's command splits paragraphs that contain line breaks
+  const blocks = getSelectedBlocks().filter(b => b !== editor);
+  if (!blocks.length) return false;
+  for (const b of blocks) {
+    b.style.textAlign = '';
+    if (getComputedStyle(b).textAlign.replace('start', 'left') !== v) b.style.textAlign = v;
+    if (!b.getAttribute('style')) b.removeAttribute('style');
+  }
+  return true;
+}
 function exec(cmd, val = null) {
   restoreSel();
   History.push('fmt', true);
-  document.execCommand(cmd, false, val);
+  if (!(ALIGN[cmd] && setAlign(ALIGN[cmd]))) document.execCommand(cmd, false, val);
   markChanged(); updateToolbar();
+  if (cmd === 'justifyFull') offerJoin(getSelectedBlocks(), 'Some lines end in a manual line break ({n} found, usually from copy-paste), so they can’t stretch to the edge.');
 }
 function rangeCovers(r, el) { const t = document.createRange(); t.selectNodeContents(el); return r.compareBoundaryPoints(Range.START_TO_START, t) <= 0 && r.compareBoundaryPoints(Range.END_TO_END, t) >= 0; }
 function applyFontSize(pt) {
@@ -2190,15 +2274,26 @@ editor.addEventListener('paste', async e => {
   const files = [...(cd.files || [])].filter(f => f.type.startsWith('image/'));
   if (files.length) { e.preventDefault(); for (const f of files) await insertImageFile(f); return; }
   const plain = cd.getData('text/plain'); const html = cd.getData('text/html');
+  const BL = 'p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, div';
+  const before = new Set(editor.querySelectorAll(BL)), startBlk = blockOf(selRange()?.startContainer);
+  const pastedBlocks = () => [startBlk, ...[...editor.querySelectorAll(BL)].filter(b => !before.has(b))].filter(b => b && b.isConnected && b !== editor);
+  // text copied from a PDF/email has a break at the end of every line: offer to make it flow again
+  const wrapped = (plain.match(/[^\n]\n(?!\n)/g) || []).length >= 2;
   if (cur.track || forcePlain || !html) {
     e.preventDefault(); forcePlain = false;
     if (plain) insertText(plain);
+    if (wrapped && looksHardWrapped(plain)) setTimeout(() => {
+      const bl = pastedBlocks();
+      if (hardBreaks(bl).length) offerJoin(bl, 'The pasted text has a line break at the end of each line ({n}).');
+      else if (bl.length > 1) toast('The pasted text has a break at the end of every line (common from PDFs and email).', { action: { label: 'Join lines', fn: () => mergeParas(bl) } });
+    }, 50);
     return;
   }
   e.preventDefault();
   History.push('paste', true);
   document.execCommand('insertHTML', false, cleanPastedHTML(html));
   markChanged();
+  setTimeout(() => offerJoin(pastedBlocks(), 'The pasted text has manual line breaks inside its paragraphs ({n}).'), 50);
 });
 function cleanPastedHTML(html) {
   html = html.replace(/<(span|div)[^>]*class="pg-gap"[^>]*><\/\1>/g, '').replace(/<tr[^>]*class="pg-gap"[^>]*>[\s\S]*?<\/tr>/g, '');
@@ -2876,6 +2971,7 @@ editor.addEventListener('contextmenu', e => {
   const items = [];
   if (hasSel) items.push({ icon: 'scissors', label: 'Cut', kbd: (isMac ? '⌘' : 'Ctrl+') + 'X', act: () => { editor.focus(); document.execCommand('cut'); } }, { icon: 'copy', label: 'Copy', kbd: (isMac ? '⌘' : 'Ctrl+') + 'C', act: () => { editor.focus(); document.execCommand('copy'); } });
   items.push({ icon: 'clipboard', label: 'Paste', kbd: (isMac ? '⌘' : 'Ctrl+') + 'V', act: () => pasteFromClipboard(false) }, { icon: 'clipboard-paste', label: 'Paste as plain text', act: () => pasteFromClipboard(true) });
+  if (hardBreaks(getSelectedBlocks()).length) items.push({ icon: 'wrap-text', label: 'Join lines (remove line breaks)', act: () => joinLines() });
   if (img) { selectImage(img); items.push('sep', { header: 'Image' },
     { icon: 'align-left', label: 'Wrap: image on the left', act: () => { History.push('img', true); setImgWrap(img, 'left'); afterImgChange(); } },
     { icon: 'align-right', label: 'Wrap: image on the right', act: () => { History.push('img', true); setImgWrap(img, 'right'); afterImgChange(); } },
@@ -3495,6 +3591,7 @@ const act = {
   stylesDialog: () => stylesDialog(),
   bookmark: () => bookmarkDialog(),
   goToPage: () => goToPageDialog(),
+  joinLines: () => { restoreSel(); const bl = getSelectedBlocks(); if (!hardBreaks(bl).length && bl.length > 1) mergeParas(bl); else joinLines(bl); },
   mTools: () => { const on = document.body.classList.toggle('m-ribbon'); $('#mTools').classList.toggle('on', on); },
   mHide: () => { editor.blur(); getSelection().removeAllRanges(); document.body.classList.remove('m-ribbon'); $('#mTools').classList.remove('on'); },
   mStyle: el => showMenu(el, [['p', 'Normal'], ['title', 'Title'], ['subtitle', 'Subtitle'], ['h1', 'Heading 1'], ['h2', 'Heading 2'], ['h3', 'Heading 3'], ['blockquote', 'Quote']].map(([v, l]) => ({ label: l, act: () => { restoreSel(); applyBlockStyle(v); } }))),
