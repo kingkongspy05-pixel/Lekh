@@ -14,7 +14,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const TAB_ID = uid('t');
-const LEKH_VERSION = 15;
+const LEKH_VERSION = 16;
 const GIST_DESC = 'Lekh documents (sync) — do not edit by hand';
 const editor = $('#editor'), page = $('#page'), pageWrap = $('#pageWrap'), canvas = $('#canvas');
 const hdr = $('#hdr'), ftr = $('#ftr');
@@ -698,7 +698,27 @@ const Pager = {
     if (this.fnCache.size > 800) this.fnCache.clear();
     this.fnCache.set(key, v); return v;
   },
-  run({ sync = false } = {}) {
+  run(opts = {}) {
+    try { this.runInner(opts); }
+    catch (err) {
+      console.error('Lekh page layout failed; redoing it from scratch', err);
+      this.full = true; this.resumeEl = null; this.mustReach = null;
+      if (!this.retried) { this.retried = true; setTimeout(() => this.run({ sync: true }), 50); }
+      return;
+    }
+    // safety net: every line of text must sit on a page; if not, the incremental layout went wrong — redo it fully
+    if (this.on() && !this.resumeEl && this.geo && this.lastO) {
+      const z = this.geo.z, base = page.getBoundingClientRect().top;
+      const end = (editor.getBoundingClientRect().bottom - base) / z - (parseFloat(getComputedStyle(editor).paddingBottom) || 0);
+      const lastSheetBottom = this.lastO.N * (this.geo.H + this.geo.G) - this.geo.G;
+      if (end > lastSheetBottom + 2) {
+        if (!this.retried) { console.warn('Lekh: text ran past the last page; re-laying out'); this.retried = true; this.full = true; setTimeout(() => this.run({ sync: true }), 0); }
+        return;
+      }
+    }
+    this.retried = false;
+  },
+  runInner({ sync = false } = {}) {
     clearTimeout(this.timer); clearTimeout(this.sliceT); this.timer = null; this.pendingSince = 0;
     if (!cur || !DB.db) return;
     const t0 = performance.now();
@@ -850,7 +870,9 @@ const Pager = {
       } else this.mustReach = null;
       const kids = [...editor.children].filter(c => !c.classList.contains('pg-gap'));
       const lk = kids[kids.length - 1];
-      if (lk) lastBottom = Math.max(lastBottom, Y(lk.getBoundingClientRect().bottom));
+      if (lk && getComputedStyle(lk).position !== 'absolute') lastBottom = Math.max(lastBottom, Y(lk.getBoundingClientRect().bottom));
+      // where the text really ends (ignores floating pictures), so the page count can never come out short
+      lastBottom = Math.max(lastBottom, Y(editor.getBoundingClientRect().bottom) - (parseFloat(getComputedStyle(editor).paddingBottom) || 0));
       // vertical alignment of text on each page (Layout → Vertical)
       const va = cur.page.valign;
       if (va === 'center' || va === 'bottom') {
